@@ -30,4 +30,5 @@ check() {
 
 package() {
   make -C potok DESTDIR="$pkgdir" PREFIX=/usr install
+  mv "$pkgdir/usr/share/licenses/potok" "$pkgdir/usr/share/licenses/$pkgname"
 }
