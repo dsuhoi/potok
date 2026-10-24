@@ -1,6 +1,6 @@
 pkgbase = potok-git
 	pkgdesc = Terminal BitTorrent client with a persistent background worker, mouse support and EN/RU
-	pkgver = 0.3.2
+	pkgver = 0.3.3
 	pkgrel = 1
 	url = https://github.com/dsuhoi/potok
 	arch = x86_64

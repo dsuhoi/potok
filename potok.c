@@ -34,8 +34,8 @@
 #include "lang.h"
 
 typedef struct { int x, y, w, h, key; } Hit;
-enum { NORMAL, ADD, SEARCH, REMOVE, DELETE_DATA, LIMIT_DOWN, LIMIT_UP, HELP, FILES, STOP_DAEMON };
-enum { PASTE_BEGIN=0x6000, PASTE_END, HIT_SOURCE=-1, HIT_DIRECTORY=-2, HIT_QUERY=-3, HIT_BROWSE=-4 };
+enum { NORMAL, ADD, SEARCH, REMOVE, LIMIT_DOWN, LIMIT_UP, HELP, FILES, STOP_DAEMON };
+enum { PASTE_BEGIN=0x6000, PASTE_END, HIT_SOURCE=-1, HIT_DIRECTORY=-2, HIT_QUERY=-3, HIT_BROWSE=-4, HIT_REMOVE_DATA=-5 };
 typedef struct { wchar_t value[4096]; size_t length,cursor,scroll; } Line;
 typedef struct {
     Client *engine;
@@ -49,7 +49,7 @@ typedef struct {
     char detail_hash[65], query[256], notice[1024], target[65], target_name[1024];
     char downloads[PATH_MAX];
     Line input,destination,file_query;
-    int field; bool pasting;
+    int field; bool pasting,remove_data;
     mbstate_t decoder;
     FileList files; size_t *matches; int file_count,file_row,file_scroll;
     int modal, down_limit;
@@ -265,7 +265,7 @@ static const char *modal_title(int modal) {
     switch (modal) {
         case ADD:return "ADD TORRENT"; case FILES:return "FILES"; case STOP_DAEMON:return "STOP DOWNLOADS";
         case SEARCH:return "SEARCH"; case REMOVE:return "REMOVE TORRENT";
-        case DELETE_DATA:return "DELETE TORRENT + DATA"; case LIMIT_DOWN:return "DOWNLOAD LIMIT";
+        case LIMIT_DOWN:return "DOWNLOAD LIMIT";
         case LIMIT_UP:return "UPLOAD LIMIT"; default:return "KEYBOARD & MOUSE";
     }
 }
@@ -295,7 +295,7 @@ static void draw_modal(App *a) {
     text(y,x,1,DIM,"╭"); text(y,x+w-1,1,DIM,"╮"); text(y+h-1,x,1,DIM,"╰"); text(y+h-1,x+w-1,1,DIM,"╯");
     label(a,y+1,x+3,w-6,ACCENT,modal_title(a->modal)); a->nhits=0;
     if (a->modal==HELP) {
-        const char *lines[]={"↑ ↓ / j k       Select row","Tab              Switch field / pane","← →              Details tabs","1 … 5            Filters","a / f            Add / choose .torrent","Ctrl-F           File search in Add","Space / p        Pause / resume","/ / l            Search / EN-RU","v                Verify data","K / J            Move in queue","t / s            Slow mode / speed limits","d / D            Remove / delete files","q / Ctrl-C       Close TUI; keep downloading","Q                Stop downloads and quit","Mouse / wheel    Select / scroll","Esc              Cancel","Ctrl-U / Ctrl-W  Clear field / delete word"};
+        const char *lines[]={"↑ ↓ / j k       Select row","Tab              Switch field / pane","← →              Details tabs","1 … 5            Filters","a / f            Add / choose .torrent","Ctrl-F           File search in Add","Space / p        Pause / resume","/ / l            Search / EN-RU","v                Verify data","K / J            Move in queue","t / s            Slow mode / speed limits","d / D            Remove torrent","q / Ctrl-C       Close TUI; keep downloading","Q                Stop downloads and quit","Mouse / wheel    Select / scroll","Esc              Cancel","Ctrl-U / Ctrl-W  Clear field / delete word"};
         for (size_t i=0;i<COUNT(lines) && y+3+(int)i<y+h-2;i++) label(a,y+3+(int)i,x+3,w-6,BASE,lines[i]);
         button(a,y+h-2,x+3,"[ Close ]",27,ACCENT); return;
     }
@@ -322,13 +322,16 @@ static void draw_modal(App *a) {
         }
         if (!a->file_count) label(a,y+5,x+4,w-8,DIM,"No .torrent files");
         if (a->files.limited) label(a,y+h-3,x+3,w-6,WARM,"Search limit reached");
+    } else if (a->modal==REMOVE) {
+        text(y+3,x+3,w-6,WARM,a->target_name);
+        button(a,y+5,x+3,a->remove_data?"[✓] Delete downloaded files":"[ ] Delete downloaded files",HIT_REMOVE_DATA,a->remove_data?BAD:BASE);
+        label(a,y+7,x+3,w-6,DIM,a->remove_data?"Space: toggle · No recycle bin":"Space: toggle");
     } else {
-        const char *description=a->modal==SEARCH?"Name":a->modal==REMOVE?"Keep downloaded files":a->modal==DELETE_DATA?"Delete downloaded files. Type DELETE.":a->modal==STOP_DAEMON?"Stop background downloads?":"Limit in KiB/s; 0 = unlimited";
+        const char *description=a->modal==SEARCH?"Name":a->modal==STOP_DAEMON?"Stop background downloads?":"Limit in KiB/s; 0 = unlimited";
         label(a,y+3,x+3,w-6,BASE,description);
-        if (a->modal==REMOVE || a->modal==DELETE_DATA) text(y+4,x+3,w-6,WARM,a->target_name);
-        if (a->modal!=REMOVE && a->modal!=STOP_DAEMON) { caret=draw_line(a,&a->input,y+6,x+3,w-6,true,HIT_SOURCE); editing=true; }
+        if (a->modal!=STOP_DAEMON) { caret=draw_line(a,&a->input,y+6,x+3,w-6,true,HIT_SOURCE); editing=true; }
     }
-    button(a,y+h-2,x+3,a->modal==ADD?"[ Enter: add ]":a->modal==FILES?"[ Enter: select ]":"[ Enter: confirm ]",'\n',a->modal==DELETE_DATA?BAD:ACCENT);
+    button(a,y+h-2,x+3,a->modal==ADD?"[ Enter: add ]":a->modal==FILES?"[ Enter: select ]":a->modal==REMOVE?"[ Enter: remove ]":"[ Enter: confirm ]",'\n',a->modal==REMOVE && a->remove_data?BAD:ACCENT);
     button(a,y+h-2,x+w-18,"[ Esc: cancel ]",27,DIM);
     if (editing) { curs_set(1); move(caret.y,caret.x); }
 }
@@ -412,7 +415,7 @@ static bool line_get(const Line *line,char *text,size_t cap) {
     text[n]=0; return true;
 }
 static void open_modal(App *a,int modal) {
-    a->modal=modal; a->field=0; a->input=(Line){0}; a->pasting=false;
+    a->modal=modal; a->field=0; a->input=(Line){0}; a->pasting=false; a->remove_data=false;
     if (modal==SEARCH) line_set(&a->input,a->query);
     if (modal==ADD) line_set(&a->destination,*a->downloads?a->downloads:"~/Downloads");
 }
@@ -488,10 +491,8 @@ static void submit(App *a) {
     } else if (modal==SEARCH) {
         if (strlen(input)>=sizeof(a->query)) { notice(a,"Search is too long"); return; }
         strcpy(a->query,input); a->selected=a->scroll=0; refilter(a,NULL);
-    } else if (modal==REMOVE) run_action(a,a->target,BT_REMOVE);
-    else if (modal==DELETE_DATA) {
-        if (strcmp(input,"DELETE")) { notice(a,"Type DELETE exactly, or Esc to cancel"); return; }
-        run_action(a,a->target,BT_DELETE);
+    } else if (modal==REMOVE) {
+        if (!run_action(a,a->target,a->remove_data?BT_DELETE:BT_REMOVE)) return;
     } else if (modal==STOP_DAEMON) {
         char error[1024];
         if (a->demo) { notice(a,"Demo"); return; }
@@ -521,6 +522,7 @@ static void key(App *a,int k) {
         if (k==27) { a->modal=a->modal==FILES?ADD:NORMAL; a->pasting=false; return; }
         if (a->modal==HELP) { if (k=='?' || k=='q' || k=='\n') a->modal=NORMAL; return; }
         if (k=='\n' || k==KEY_ENTER) { submit(a); return; }
+        if (a->modal==REMOVE) { if (k==' ' || k==HIT_REMOVE_DATA) a->remove_data=!a->remove_data; return; }
         if (a->modal==ADD && k==6) { choose_file(a); return; }
         if (a->modal==ADD && (k=='\t' || k==KEY_BTAB)) { a->field=!a->field; return; }
         if (a->modal==FILES && (k==KEY_UP || k==KEY_DOWN || k==KEY_NPAGE || k==KEY_PPAGE)) {
@@ -574,7 +576,7 @@ static void key(App *a,int k) {
         else if (k==' ' || k=='p') run_action(a,t->hash,t->status?BT_PAUSE:BT_RESUME);
         else if (k=='v') run_action(a,t->hash,BT_VERIFY);
         else if (k=='K' || k=='J') run_action(a,t->hash,k=='K'?BT_UP:BT_DOWN);
-        else if (k=='d' || k=='D') { strcpy(a->target,t->hash); strcpy(a->target_name,t->name); open_modal(a,k=='d'?REMOVE:DELETE_DATA); }
+        else if (k=='d' || k=='D') { strcpy(a->target,t->hash); strcpy(a->target_name,t->name); open_modal(a,REMOVE); }
     }
 }
 static void mouse(App *a,MEVENT e) {
@@ -619,7 +621,7 @@ static void input_event(App *a,wint_t c,bool special) {
     if (a->pasting) { if (!special) input_text(a,(wchar_t)c); return; }
     if (special && c==KEY_MOUSE) { MEVENT e; if (getmouse(&e)==OK) mouse(a,e); }
     else if (special) key(a,(int)c);
-    else if (a->modal && c>=32 && c!=127) input_text(a,(wchar_t)c);
+    else if (a->modal && a->modal!=REMOVE && c>=32 && c!=127) input_text(a,(wchar_t)c);
     else key(a,(int)c);
 }
 static void input_byte(App *a,int c) {
@@ -708,7 +710,7 @@ int main(int argc,char **argv) {
         }
         if (!strcmp(argv[i],"--")) { positional=true; continue; }
         if (!strcmp(argv[i],"--help") || !strcmp(argv[i],"-h")) { help=true; continue; }
-        if (!strcmp(argv[i],"--version")) { puts("potok 0.3.2"); return 0; }
+        if (!strcmp(argv[i],"--version")) { puts("potok 0.3.3"); return 0; }
         if (!strcmp(argv[i],"--demo")) a.demo=true;
         else if (!strcmp(argv[i],"--daemon")) daemon=true;
         else if (!strcmp(argv[i],"--background")) background=true;

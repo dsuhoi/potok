@@ -48,10 +48,12 @@ static void test_model_and_actions(void) {
     a.filter=0; strcpy(a.query,"FEDORA"); refilter(&a,NULL); assert(a.total==1 && strstr(selected(&a)->name,"Fedora"));
     strcpy(a.query,"missing"); refilter(&a,NULL); assert(!a.total && !selected(&a));
     *a.query=0; a.selected=0; refilter(&a,NULL);
-    key(&a,'d'); assert(a.modal==REMOVE); strcpy(keep,a.target); a.selected=1;
-    assert(strcmp(keep,selected(&a)->hash)); submit(&a); assert(!a.modal && !strcmp(keep,a.target));
-    key(&a,'D'); set_input(&a,L"delete"); submit(&a); assert(a.modal==DELETE_DATA);
-    set_input(&a,L"DELETE"); submit(&a); assert(!a.modal);
+    key(&a,'d'); assert(a.modal==REMOVE && !a.remove_data); strcpy(keep,a.target); a.selected=1;
+    assert(strcmp(keep,selected(&a)->hash)); submit(&a); assert(a.modal==REMOVE && !strcmp(keep,a.target));
+    input_event(&a,L' ',false); assert(a.remove_data); key(&a,27); assert(!a.modal);
+    key(&a,'D'); assert(a.modal==REMOVE && !a.remove_data);
+    input_event(&a,PASTE_BEGIN,true); input_event(&a,L' ',false); input_event(&a,PASTE_END,true); assert(!a.remove_data);
+    key(&a,HIT_REMOVE_DATA); assert(a.remove_data); submit(&a); assert(a.modal==REMOVE); key(&a,27);
     open_modal(&a,SEARCH); input_text(&a,L'п'); input_text(&a,L'т'); key(&a,KEY_LEFT); input_text(&a,L'о');
     assert(!wcscmp(a.input.value,L"пот")); key(&a,KEY_BACKSPACE); assert(!wcscmp(a.input.value,L"пт")); key(&a,27);
     open_modal(&a,ADD); set_input(&a,L"magnet:?xt=urn:btih:0123456789"); key(&a,'\t'); assert(a.field==1);
@@ -112,12 +114,25 @@ static void test_ui(bool screenshots) {
     if (screenshots) snapshot("artifacts/potok-add.svg");
     for (int i=0;i<a.nhits;i++) if (a.hits[i].key==27) { e=(MEVENT){.x=a.hits[i].x,.y=a.hits[i].y,.bstate=BUTTON1_PRESSED}; mouse(&a,e); break; }
     assert(!a.modal);
+    key(&a,'d'); draw(&a,a.demo_start+1); assert(a.modal==REMOVE && !a.remove_data);
+    if (screenshots) snapshot("artifacts/potok-remove.svg");
+    bool checkbox=false;
+    for (int i=0;i<a.nhits;i++) if (a.hits[i].key==HIT_REMOVE_DATA) {
+        e=(MEVENT){.x=a.hits[i].x+1,.y=a.hits[i].y,.bstate=BUTTON1_PRESSED}; mouse(&a,e); checkbox=true; break;
+    }
+    assert(checkbox && a.remove_data); draw(&a,a.demo_start+1);
+    if (screenshots) snapshot("artifacts/potok-delete.svg");
+    key(&a,27); key(&a,'D'); assert(a.modal==REMOVE && !a.remove_data); key(&a,27);
     draw(&a,a.demo_start+1);
     for (int i=0;i<a.nhits;i++) if (a.hits[i].key=='l') { e=(MEVENT){.x=a.hits[i].x,.y=a.hits[i].y,.bstate=BUTTON1_PRESSED}; mouse(&a,e); break; }
     assert(a.russian); a.notice_until=0; draw(&a,a.demo_start+1);
     assert(mvinnwstr(1,3,brand,8)!=ERR && !wcsncmp(brand,L"≈  ПОТОК",8));
     wchar_t title[32]; assert(mvinnwstr(5,3,title,10)!=ERR && !wcsncmp(title,L"БИБЛИОТЕКА",10));
     if (screenshots) snapshot("artifacts/potok-ru.svg");
+    if (screenshots) {
+        key(&a,'d'); draw(&a,a.demo_start+1); snapshot("artifacts/potok-remove-ru.svg");
+        key(&a,' '); draw(&a,a.demo_start+1); snapshot("artifacts/potok-delete-ru.svg"); key(&a,27);
+    }
     if (screenshots) {
         open_modal(&a,ADD); set_input(&a,L"~/Downloads/ubuntu"); draw(&a,a.demo_start+1); snapshot("artifacts/potok-add-ru.svg");
         a.files.paths=allocate(3*sizeof(*a.files.paths)); a.files.count=3; strcpy(a.files.root,"/home/user/Downloads");
@@ -162,13 +177,16 @@ static void terminal_read(int fd,char *buffer,size_t cap,int milliseconds) {
 static void test_terminal(bool real,bool cli) {
     const char *binary=getenv("POTOK_TEST_BINARY"); if (!binary || !*binary) binary="./potok";
     char executable[PATH_MAX]; assert(realpath(binary,executable)); binary=executable;
-    char state[]="/tmp/potok-ui-XXXXXX",downloads[128],config[128],source[128];
+    char state[]="/tmp/potok-ui-XXXXXX",downloads[128],config[128],source[128],payload[256],sentinel[256];
     if (real) {
         assert(mkdtemp(state)); snprintf(downloads,sizeof(downloads),"%s/downloads",state); snprintf(config,sizeof(config),"%s/config",state);
         snprintf(source,sizeof(source),"%s/-русский файл.torrent",state); FILE *f=fopen(source,"wb"); assert(f);
         fputs("d4:infod6:lengthi4e4:name11:payload.bin12:piece lengthi16384e6:pieces20:",f);
         const unsigned char hash[]={0xa9,0x4a,0x8f,0xe5,0xcc,0xb1,0x9b,0xa6,0x1c,0x4c,0x08,0x73,0xd3,0x91,0xe9,0x87,0x98,0x2f,0xbb,0xd3};
         assert(fwrite(hash,1,sizeof(hash),f)==sizeof(hash)); fputs("7:privatei1eee",f); fclose(f);
+        assert(!mkdir(downloads,0700)); snprintf(payload,sizeof(payload),"%s/payload.bin",downloads);
+        f=fopen(payload,"wb"); assert(f); fputs(cli?"test":"te",f); fclose(f);
+        snprintf(sentinel,sizeof(sentinel),"%s/keep.txt",downloads); f=fopen(sentinel,"w"); assert(f); fputs("keep",f); fclose(f);
     }
     int master=posix_openpt(O_RDWR|O_NOCTTY); assert(master>=0 && !grantpt(master) && !unlockpt(master));
     char *name=ptsname(master); assert(name); char slave_name[128]; snprintf(slave_name,sizeof(slave_name),"%s",name);
@@ -204,15 +222,37 @@ static void test_terminal(bool real,bool cli) {
             assert(write(master,"\t\n",2)==2); terminal_read(master,buffer,sizeof(buffer),700);
         }
         assert(strstr(buffer,"payload.bin"));
+        char error[1024]={0}; Client *probe=client_open(state,downloads,false,error,sizeof(error)); assert(probe);
+        assert(write(master,"d",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
+        assert(strstr(buffer,"Delete downloaded files"));
+        assert(write(master," ",1)==1); terminal_read(master,buffer,sizeof(buffer),100);
+        assert(write(master,"\033",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
+        Torrent *rows=NULL; int n=0; assert(client_snapshot(probe,&rows,&n,error,sizeof(error)) && n==1); free(rows); assert(!access(payload,F_OK));
+        assert(write(master,"d",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
+        assert(write(master,"\n",1)==1); terminal_read(master,buffer,sizeof(buffer),300);
+        assert(client_snapshot(probe,&rows,&n,error,sizeof(error)) && n==0); free(rows);
+        assert(!access(payload,F_OK) && !access(sentinel,F_OK) && !access(source,F_OK));
+        assert(client_add(probe,source,downloads,true,error,sizeof(error))); terminal_read(master,buffer,sizeof(buffer),1000);
+        assert(write(master,"d",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
+        if (cli) {
+            const char click[]="\033[<0;30;20M\033[<0;30;20m"; assert(write(master,click,sizeof(click)-1)==sizeof(click)-1);
+        } else assert(write(master," ",1)==1);
+        terminal_read(master,buffer,sizeof(buffer),100);
+        assert(write(master,"\n",1)==1); terminal_read(master,buffer,sizeof(buffer),300);
+        for (int i=0;i<100 && !access(payload,F_OK);i++) { struct timespec wait={0,20000000}; nanosleep(&wait,NULL); }
+        assert(access(payload,F_OK)<0 && errno==ENOENT);
+        assert(client_snapshot(probe,&rows,&n,error,sizeof(error)) && n==0); free(rows);
+        assert(!access(sentinel,F_OK) && !access(source,F_OK));
+        assert(client_add(probe,source,downloads,true,error,sizeof(error))); client_close(probe);
         assert(write(master,"q",1)==1); terminal_read(master,buffer,sizeof(buffer),250);
         int status; assert(waitpid(pid,&status,0)==pid && WIFEXITED(status) && WEXITSTATUS(status)==0); close(master);
-        char error[1024]={0}; Client *client=client_open(state,downloads,false,error,sizeof(error)); assert(client && client->pid>0);
+        Client *client=client_open(state,downloads,false,error,sizeof(error)); assert(client && client->pid>0);
         Torrent *items=NULL; int count=0; assert(client_snapshot(client,&items,&count,error,sizeof(error)) && count==1 && !strcmp(items[0].name,"payload.bin"));
         assert(client_action(client,items[0].hash,BT_REMOVE,error,sizeof(error))); free(items);
         assert(client_stop(client,error,sizeof(error))); client_close(client); if (worker_pidfd>=0) close(worker_pidfd); worker_pidfd=-1;
         char path[256]; snprintf(path,sizeof(path),"%s/lock",state); assert(!unlink(path));
         snprintf(path,sizeof(path),"%s/worker.log",state); assert(!unlink(path));
-        snprintf(path,sizeof(path),"%s/config",config); assert(!unlink(path)); assert(!unlink(source)); assert(!rmdir(config)); assert(!rmdir(downloads));
+        snprintf(path,sizeof(path),"%s/config",config); assert(!unlink(path)); assert(!unlink(source)); assert(!unlink(sentinel)); assert(!rmdir(config)); assert(!rmdir(downloads));
         for (int i=0;i<100;i++) { if (!rmdir(state)) break; struct timespec wait={0,10000000}; nanosleep(&wait,NULL); if (i==99) assert(false); } return;
     }
     assert(write(master,"l",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
@@ -298,6 +338,6 @@ int main(int argc,char **argv) {
     test_settings_and_files(); puts("ok · private settings, atomic save, fuzzy file search, symlinks");
     test_editor(); puts("ok · stable input viewport, fields, bracketed paste");
     test_ui(argc>1 && !strcmp(argv[1],"--snapshots")); puts("ok · rendering, transparent background, resize, mouse, modals");
-    test_terminal(false,false); test_terminal(true,false); test_terminal(true,true); puts("ok · PTY: paste, keyboard, CLI file with spaces/Unicode, background survives TUI exit, clean stop");
+    test_terminal(false,false); test_terminal(true,false); test_terminal(true,true); puts("ok · PTY: CLI, paste, remove/keep, checkbox delete complete/partial files, mouse, background, stop");
     return 0;
 }

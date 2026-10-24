@@ -45,7 +45,7 @@ make DESTDIR="$PWD/stage" PREFIX=/usr install
 ```
 
 `make` builds the application only. Tests, source archives and portable bundles
-are separate targets. `make source` creates `dist/potok-0.3.2.tar.gz`;
+are separate targets. `make source` creates `dist/potok-0.3.3.tar.gz`;
 `make bundle` creates `dist/potok/` with a copy of libtorrent. The portable bundle
 still needs compatible system ncurses, OpenSSL, C++ runtime and glibc.
 
@@ -62,7 +62,7 @@ still needs compatible system ncurses, OpenSSL, C++ runtime and glibc.
 | `/` | Filter by name |
 | `s` / `t` | Speed limits / slow mode |
 | `v` | Verify downloaded data |
-| `d` / `D` | Remove torrent / delete torrent and data after confirmation |
+| `d` / `D` | Open removal dialog with an optional data-deletion checkbox |
 | `l` | Switch English / Russian; the setting is saved |
 | `q` / `Ctrl-C` | Close TUI; continue downloading |
 | `Q` | Stop downloads and quit after confirmation |
@@ -70,6 +70,14 @@ still needs compatible system ncurses, OpenSSL, C++ runtime and glibc.
 
 The mouse selects rows, tabs and buttons; the wheel scrolls. Source fields
 support UTF-8, bracketed paste, cursor editing and paths with spaces.
+
+The removal dialog defaults to keeping files. Check **Delete downloaded files**
+using Space or the mouse to also delete complete or partial downloads, then
+confirm with Enter. Esc cancels. The checkbox resets for each removal.
+Deletion bypasses the recycle bin and only removes this torrent's data;
+other files in the download directory and the original imported `.torrent`
+file are kept.
+
 The picker searches your whole home directory by default and streams matches
 into fzf while scanning. Choosing a file keeps that search root for the next
 search. Set `browse_dir` in the config to use another root, or type a directory
