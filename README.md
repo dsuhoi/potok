@@ -45,7 +45,7 @@ make DESTDIR="$PWD/stage" PREFIX=/usr install
 ```
 
 `make` builds the application only. Tests, source archives and portable bundles
-are separate targets. `make source` creates `dist/potok-0.3.3.tar.gz`;
+are separate targets. `make source` creates `dist/potok-0.4.0.tar.gz`;
 `make bundle` creates `dist/potok/` with a copy of libtorrent. The portable bundle
 still needs compatible system ncurses, OpenSSL, C++ runtime and glibc.
 
@@ -54,9 +54,12 @@ still needs compatible system ncurses, OpenSSL, C++ runtime and glibc.
 | Key | Action |
 |---|---|
 | `a` | Add a magnet, HTTP(S) `.torrent` URL, or local `.torrent` |
-| `f` / `Ctrl-F` in Add | Search `.torrent` files using fzf or the built-in picker |
+| `f` / `Ctrl-F` in the source field | Search `.torrent` files using fzf or the built-in tree |
+| `Ctrl-T` in Add | Search `.torrent` files as a directory tree |
+| `Ctrl-F` in the destination field | Choose a download folder |
 | `Tab`, `Enter`, `Esc` | Switch fields, submit, cancel |
 | `↑ ↓` / `j k` | Select a torrent |
+| `Enter` in the main screen | Open the selected torrent's download directory |
 | `p` / `Space` | Pause / resume |
 | `← →` | Overview, files, peers, trackers |
 | `/` | Filter by name |
@@ -71,6 +74,16 @@ still needs compatible system ncurses, OpenSSL, C++ runtime and glibc.
 The mouse selects rows, tabs and buttons; the wheel scrolls. Source fields
 support UTF-8, bracketed paste, cursor editing and paths with spaces.
 
+**Completed** includes finished downloads even when paused. Their rows show
+**Ready** instead of an ETA; uploading remains visible as the Seeding status.
+Enter opens the download directory through optional `xdg-open` (`xdg-utils`).
+
+The add form shows **Save to** and the available disk space. Click **Choose
+folder**, or press Ctrl-F in that field: Enter / Right enters a directory,
+Left goes to its parent, and F2 selects the current directory. Esc returns
+without changing the destination. You can also type a new directory path;
+free space is then measured on its nearest existing parent.
+
 The removal dialog defaults to keeping files. Check **Delete downloaded files**
 using Space or the mouse to also delete complete or partial downloads, then
 confirm with Enter. Esc cancels. The checkbox resets for each removal.
@@ -84,6 +97,13 @@ search. Set `browse_dir` in the config to use another root, or type a directory
 in the source field before pressing `Ctrl-F` for a single scoped search.
 Symlink directories are not followed. Traversal is capped at 32 levels and
 100,000 torrent files.
+
+Ctrl-T opens the built-in tree even if fzf is installed. Type to filter the
+results: matching files keep their parent directories, which expand while
+searching. With an empty query, use Left / Right, Enter, or click a directory
+to fold or unfold it. Enter or double-click selects a file. Only directories
+containing torrent files appear. The tree uses the same search root and limits
+as file search and is built after scanning that root.
 
 `potok path/to/file.torrent` adds the file and opens the interface. Relative
 paths, spaces and Unicode filenames are supported. Quote paths containing

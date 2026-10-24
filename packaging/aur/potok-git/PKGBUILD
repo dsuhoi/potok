@@ -1,6 +1,6 @@
 # Maintainer: Dan Sukhorukov <dsuh0i.h8@gmail.com>
 pkgname=potok-git
-pkgver=0.3.3
+pkgver=0.4.0
 pkgrel=1
 pkgdesc='Terminal BitTorrent client with a persistent background worker, mouse support and EN/RU'
 arch=('x86_64')
@@ -8,7 +8,8 @@ url='https://github.com/dsuhoi/potok'
 license=('MIT')
 depends=('glibc' 'ncurses' 'libtorrent-rasterbar' 'openssl' 'libgcc' 'libstdc++')
 makedepends=('git' 'boost')
-optdepends=('fzf: fuzzy search in the torrent file picker')
+optdepends=('fzf: fuzzy search in the torrent file picker'
+            'xdg-utils: open download directories in a file manager')
 provides=('potok')
 conflicts=('potok')
 options=('!debug')

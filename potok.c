@@ -24,6 +24,8 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
@@ -34,9 +36,10 @@
 #include "lang.h"
 
 typedef struct { int x, y, w, h, key; } Hit;
-enum { NORMAL, ADD, SEARCH, REMOVE, LIMIT_DOWN, LIMIT_UP, HELP, FILES, STOP_DAEMON };
-enum { PASTE_BEGIN=0x6000, PASTE_END, HIT_SOURCE=-1, HIT_DIRECTORY=-2, HIT_QUERY=-3, HIT_BROWSE=-4, HIT_REMOVE_DATA=-5 };
+enum { NORMAL, ADD, SEARCH, REMOVE, LIMIT_DOWN, LIMIT_UP, HELP, FILES, STOP_DAEMON, DIRECTORIES };
+enum { PASTE_BEGIN=0x6000, PASTE_END, HIT_SOURCE=-1, HIT_DIRECTORY=-2, HIT_QUERY=-3, HIT_BROWSE=-4, HIT_REMOVE_DATA=-5, HIT_TREE=-6, HIT_CHOOSE_DIR=-7, HIT_PARENT=-8, HIT_USE_DIR=-9 };
 typedef struct { wchar_t value[4096]; size_t length,cursor,scroll; } Line;
+typedef struct { char *path; int parent,depth,file; bool expanded,match; } TreeNode;
 typedef struct {
     Client *engine;
     Settings settings;
@@ -52,7 +55,9 @@ typedef struct {
     int field; bool pasting,remove_data;
     mbstate_t decoder;
     FileList files; size_t *matches; int file_count,file_row,file_scroll;
+    TreeNode *tree; size_t tree_count; char *tree_query; bool file_tree;
     int modal, down_limit;
+    int openers;
     double notice_until, demo_start;
     int width, height, side, table_y, table_bottom, pane_y;
     Hit hits[64]; int nhits;
@@ -83,12 +88,16 @@ static bool contains(const char *s,const char *query) {
     for (;*s;s++) if (!strncasecmp(s,query,len)) return true;
     return !len;
 }
+static bool completed(const Torrent *t) { return t->metadata>=1 && t->done>=1; }
+static bool filter_matches(const Torrent *t,int filter) {
+    return !filter || (filter==1 && !completed(t) && (t->status==3||t->status==4)) ||
+        (filter==2 && completed(t)) || (filter==3 && !t->status) || (filter==4 && *t->error);
+}
 static void refilter(App *a, const char *hash) {
     a->total = 0; int keep = -1;
     for (int i = 0; i < a->count; i++) {
         Torrent *t = &a->items[i];
-        bool match = !a->filter || (a->filter==1 && (t->status==3||t->status==4)) ||
-            (a->filter==2 && (t->status==5||t->status==6)) || (a->filter==3 && !t->status) || (a->filter==4 && *t->error);
+        bool match = filter_matches(t,a->filter);
         if (!match || !contains(t->name,a->query)) continue;
         a->visible[a->total] = i;
         if (hash && !strcmp(t->hash,hash)) keep = a->total;
@@ -221,7 +230,8 @@ static void draw_details(App *a,double time) {
         char b[32], e[32];
         text(y+3,x,w,WHITE,t->name);
         drawf(a,y+5,x,w,BASE,"%s   ·   %s   ·   %d peers   ·   ratio %.2f",status_name(a,t),bytes(a,t->size,b),t->peers,MAX(0,t->ratio));
-        drawf(a,y+6,x,w,DIM,"ETA %s   ·   queue #%d   ·   %.1f%% complete",eta(a,t->eta,e),t->queue+1,t->done*100);
+        if (completed(t)) label(a,y+6,x,w,ACCENT,"Ready");
+        else drawf(a,y+6,x,w,DIM,"ETA %s   ·   queue #%d   ·   %.1f%% complete",eta(a,t->eta,e),t->queue+1,t->done*100);
         if (y+8<bottom) drawf(a,y+8,x,w,DIM,"SAVE TO  %s",t->dir);
         if (*t->error && y+9<bottom) text(y+9,x,w,BAD,t->error);
         return;
@@ -255,15 +265,27 @@ static void draw_details(App *a,double time) {
     (void)time;
 }
 static Line *active_line(App *a);
-static void choose_file(App *a);
+static void choose_file(App *a,bool tree);
 static void filter_files(App *a);
 static void selected_file(App *a,const char *path);
 static bool line_set(Line *line,const char *text);
 static bool line_get(const Line *line,char *text,size_t cap);
 static bool absolute_path(const char *value,char out[PATH_MAX]);
+static void choose_directory(App *a,const char *root);
+static bool destination_space(const Line *line,double *available) {
+    char value[16384],path[PATH_MAX]; struct statvfs fs;
+    if (!line_get(line,value,sizeof(value)) || !*value || !absolute_path(value,path)) return false;
+    size_t length=strlen(path); while (length>1 && path[length-1]=='/') path[--length]=0;
+    while (statvfs(path,&fs)) {
+        if (errno!=ENOENT) return false;
+        char *slash=strrchr(path,'/'); if (!slash || !slash[1]) return false;
+        if (slash==path) slash[1]=0; else *slash=0;
+    }
+    *available=(double)fs.f_bavail*fs.f_frsize; return true;
+}
 static const char *modal_title(int modal) {
     switch (modal) {
-        case ADD:return "ADD TORRENT"; case FILES:return "FILES"; case STOP_DAEMON:return "STOP DOWNLOADS";
+        case ADD:return "ADD TORRENT"; case FILES:return "FILES"; case DIRECTORIES:return "SAVE TO"; case STOP_DAEMON:return "STOP DOWNLOADS";
         case SEARCH:return "SEARCH"; case REMOVE:return "REMOVE TORRENT";
         case LIMIT_DOWN:return "DOWNLOAD LIMIT";
         case LIMIT_UP:return "UPLOAD LIMIT"; default:return "KEYBOARD & MOUSE";
@@ -285,8 +307,8 @@ static Caret draw_line(App *a,Line *line,int y,int x,int width,bool active,int w
     return (Caret){y,x+1+MIN(cells,width-3)};
 }
 static void draw_modal(App *a) {
-    int w=MIN(a->width-6,90), h=a->modal==HELP?22:a->modal==ADD?16:a->modal==FILES?MIN(a->height-4,24):12;
-    if (a->modal!=ADD && a->modal!=FILES) w=MIN(w,76);
+    int w=MIN(a->width-6,90), h=a->modal==HELP?23:a->modal==ADD?18:(a->modal==FILES||a->modal==DIRECTORIES)?MIN(a->height-4,24):12;
+    if (a->modal!=ADD && a->modal!=FILES && a->modal!=DIRECTORIES) w=MIN(w,76);
     int x=(a->width-w)/2,y=MAX(0,(a->height-h)/2); h=MIN(h,a->height);
     Caret caret={0}; bool editing=false;
     for (int i=0;i<h;i++) fill(y+i,x,w,PANEL);
@@ -295,21 +317,27 @@ static void draw_modal(App *a) {
     text(y,x,1,DIM,"╭"); text(y,x+w-1,1,DIM,"╮"); text(y+h-1,x,1,DIM,"╰"); text(y+h-1,x+w-1,1,DIM,"╯");
     label(a,y+1,x+3,w-6,ACCENT,modal_title(a->modal)); a->nhits=0;
     if (a->modal==HELP) {
-        const char *lines[]={"↑ ↓ / j k       Select row","Tab              Switch field / pane","← →              Details tabs","1 … 5            Filters","a / f            Add / choose .torrent","Ctrl-F           File search in Add","Space / p        Pause / resume","/ / l            Search / EN-RU","v                Verify data","K / J            Move in queue","t / s            Slow mode / speed limits","d / D            Remove torrent","q / Ctrl-C       Close TUI; keep downloading","Q                Stop downloads and quit","Mouse / wheel    Select / scroll","Esc              Cancel","Ctrl-U / Ctrl-W  Clear field / delete word"};
+        const char *lines[]={"↑ ↓ / j k       Select row","Tab              Switch field / pane","← →              Details tabs","1 … 5            Filters","a / f            Add / choose .torrent","Ctrl-F / Ctrl-T  Search / tree in Add","Enter            Open download folder","Space / p        Pause / resume","/ / l            Search / EN-RU","v                Verify data","K / J            Move in queue","t / s            Slow mode / speed limits","d / D            Remove torrent","q / Ctrl-C       Close TUI; keep downloading","Q                Stop downloads and quit","Mouse / wheel    Select / scroll","Esc              Cancel","Ctrl-U / Ctrl-W  Clear field / delete word"};
         for (size_t i=0;i<COUNT(lines) && y+3+(int)i<y+h-2;i++) label(a,y+3+(int)i,x+3,w-6,BASE,lines[i]);
         button(a,y+h-2,x+3,"[ Close ]",27,ACCENT); return;
     }
     if (a->modal==ADD) {
         label(a,y+3,x+3,w-6,DIM,"Magnet / URL / .torrent");
         Caret source=draw_line(a,&a->input,y+4,x+3,w-6,a->field==0,HIT_SOURCE);
-        label(a,y+7,x+3,w-6,DIM,"Download directory");
-        Caret destination=draw_line(a,&a->destination,y+8,x+3,w-6,a->field==1,HIT_DIRECTORY);
-        button(a,y+11,x+3,"[Ctrl-F Files]",HIT_BROWSE,ACCENT);
-        label(a,y+11,x+w-26,22,DIM,"Tab: switch field");
+        button(a,y+6,x+3,"[Ctrl-F Search]",HIT_BROWSE,ACCENT);
+        button(a,y+6,x+3+cell_width(tr(a,"[Ctrl-F Search]"))+2,"[Ctrl-T Tree]",HIT_TREE,ACCENT);
+        label(a,y+8,x+3,w-6,DIM,"Save to");
+        Caret destination=draw_line(a,&a->destination,y+9,x+3,w-6,a->field==1,HIT_DIRECTORY);
+        double available; char b[32];
+        if (destination_space(&a->destination,&available)) drawf(a,y+10,x+3,w-6,DIM,"Free: %s",bytes(a,available,b));
+        else label(a,y+10,x+3,w-6,DIM,"Free: unavailable");
+        button(a,y+12,x+3,"[Choose folder]",HIT_CHOOSE_DIR,ACCENT);
+        label(a,y+12,x+w-26,22,DIM,"Tab: switch field");
         caret=a->field?destination:source; editing=true;
-    } else if (a->modal==FILES) {
+    } else if (a->modal==FILES || a->modal==DIRECTORIES) {
         text(y+2,x+3,w-6,DIM,a->files.root);
         caret=draw_line(a,&a->file_query,y+3,x+3,w-6,true,HIT_QUERY); editing=true;
+        if (a->modal==DIRECTORIES) button(a,y+4,x+3,"[← Parent]",HIT_PARENT,DIM);
         int rows=h-8;
         if (a->file_row<a->file_scroll) a->file_scroll=a->file_row;
         if (a->file_row>=a->file_scroll+rows) a->file_scroll=a->file_row-rows+1;
@@ -317,10 +345,17 @@ static void draw_modal(App *a) {
         for (int i=a->file_scroll;i<a->file_count && i<a->file_scroll+rows;i++) {
             int row=y+5+i-a->file_scroll; bool selected=i==a->file_row;
             if (selected) fill(row,x+3,w-6,SELECT);
-            text(row,x+4,w-8,selected?SELECT_ACCENT:BASE,a->files.paths[a->matches[i]]+skip);
+            if (a->file_tree && a->modal==FILES) {
+                TreeNode *node=&a->tree[a->matches[i]];
+                const char *name=strrchr(node->path,'/'); name=name?name+1:node->path;
+                int indent=MIN(node->depth*2,w-16);
+                text(row,x+4+indent,2,selected?SELECT_ACCENT:ACCENT,node->file<0?(node->expanded?"▾":"▸"):"·");
+                text(row,x+6+indent,w-10-indent,selected?SELECT_ACCENT:BASE,name);
+            } else text(row,x+4,w-8,selected?SELECT_ACCENT:BASE,a->files.paths[a->matches[i]]+skip);
             hit(a,row,x+3,w-6,1,-100-i);
         }
-        if (!a->file_count) label(a,y+5,x+4,w-8,DIM,"No .torrent files");
+        if (!a->file_count) label(a,y+5,x+4,w-8,DIM,a->modal==DIRECTORIES?"No folders":"No .torrent files");
+        if (a->file_tree && a->modal==FILES) label(a,y+h-3,x+3,w-6,DIM,"← →: fold / unfold · Enter: select");
         if (a->files.limited) label(a,y+h-3,x+3,w-6,WARM,"Search limit reached");
     } else if (a->modal==REMOVE) {
         text(y+3,x+3,w-6,WARM,a->target_name);
@@ -331,7 +366,7 @@ static void draw_modal(App *a) {
         label(a,y+3,x+3,w-6,BASE,description);
         if (a->modal!=STOP_DAEMON) { caret=draw_line(a,&a->input,y+6,x+3,w-6,true,HIT_SOURCE); editing=true; }
     }
-    button(a,y+h-2,x+3,a->modal==ADD?"[ Enter: add ]":a->modal==FILES?"[ Enter: select ]":a->modal==REMOVE?"[ Enter: remove ]":"[ Enter: confirm ]",'\n',a->modal==REMOVE && a->remove_data?BAD:ACCENT);
+    button(a,y+h-2,x+3,a->modal==ADD?"[ Enter: add ]":a->modal==DIRECTORIES?"[F2 Use folder]":a->modal==FILES?"[ Enter: select ]":a->modal==REMOVE?"[ Enter: remove ]":"[ Enter: confirm ]",a->modal==DIRECTORIES?HIT_USE_DIR:'\n',a->modal==REMOVE && a->remove_data?BAD:ACCENT);
     button(a,y+h-2,x+w-18,"[ Esc: cancel ]",27,DIM);
     if (editing) { curs_set(1); move(caret.y,caret.x); }
 }
@@ -347,10 +382,10 @@ static void draw(App *a,double time) {
     if (a->demo) label(a,1,COLS-12,10,WARM,"Demo");
     else if (client_busy(a->engine)) drawf(a,1,COLS-20,18,ACCENT,"%s %s",spin[(int)(time*10)%10],tr(a,"Adding…"));
     rule(3,2,COLS-4);
-    const char *filters[]={tr(a,"All torrents"),tr(a,"Downloads"),tr(a,"Seeds"),tr(a,"Paused"),tr(a,"Errors")};
+    const char *filters[]={tr(a,"All torrents"),tr(a,"Downloads"),tr(a,"Completed"),tr(a,"Paused"),tr(a,"Errors")};
     int counts[5]={a->count,0,0,0,0}; double down=0,up=0,peers=0;
     for (int i=0;i<a->count;i++) { Torrent *t=&a->items[i]; down+=t->down; up+=t->up; peers+=t->peers;
-        counts[1]+=t->status==3||t->status==4; counts[2]+=t->status==5||t->status==6; counts[3]+=t->status==0; counts[4]+=*t->error!=0;
+        for (int k=1;k<5;k++) counts[k]+=filter_matches(t,k);
     }
     if (a->side) {
         label(a,5,3,17,DIM,"LIBRARY");
@@ -384,7 +419,9 @@ static void draw(App *a,double time) {
         progress(y,x+w-35,9,value,t->status==4||t->status==6||t->status==2,chosen,time);
         if (value<0) text(y,x+w-25,5,c,"  …"); else drawf(a,y,x+w-25,5,c,"%3.0f%%",value*100);
         drawf(a,y,x+w-19,9,c,"%s/s",bytes(a,t->down,b)); drawf(a,y,x+w-9,9,c,"%s/s",bytes(a,t->up,b));
-        char e[32]; drawf(a,y+1,x+1,w-2,chosen?SELECT:*t->error?BAD:DIM,"%s  ·  %s  ·  %d peers  ·  ETA %s",status_name(a,t),bytes(a,t->size,b),t->peers,eta(a,t->eta,e));
+        char e[32];
+        if (completed(t)) drawf(a,y+1,x+1,w-2,chosen?SELECT:*t->error?BAD:DIM,"%s  ·  %s  ·  %d peers  ·  %s",status_name(a,t),bytes(a,t->size,b),t->peers,tr(a,"Ready"));
+        else drawf(a,y+1,x+1,w-2,chosen?SELECT:*t->error?BAD:DIM,"%s  ·  %s  ·  %d peers  ·  ETA %s",status_name(a,t),bytes(a,t->size,b),t->peers,eta(a,t->eta,e));
     }
     if (!a->total) label(a,11,x+2,w-4,DIM,"No torrents");
     if (LINES>=32 || a->detail_focus) {
@@ -402,7 +439,7 @@ static void draw(App *a,double time) {
     refresh();
 }
 
-static Line *active_line(App *a) { return a->modal==FILES?&a->file_query:a->modal==ADD && a->field?&a->destination:&a->input; }
+static Line *active_line(App *a) { return a->modal==FILES||a->modal==DIRECTORIES?&a->file_query:a->modal==ADD && a->field?&a->destination:&a->input; }
 static bool line_set(Line *line,const char *text) {
     Line next={0}; mbstate_t state={0}; const char *p=text;
     size_t n=mbsrtowcs(next.value,&p,COUNT(next.value)-1,&state);
@@ -422,18 +459,67 @@ static void open_modal(App *a,int modal) {
 static void save_settings(App *a) {
     char error[1024]; if (!settings_save(&a->settings,error,sizeof(error))) notice(a,"Error: %s",tr(a,error));
 }
+static void clear_files(App *a) {
+    for (size_t i=0;i<a->tree_count;i++) free(a->tree[i].path);
+    free(a->tree); a->tree=NULL; a->tree_count=0; a->file_tree=false;
+    free(a->tree_query); a->tree_query=NULL;
+    files_free(&a->files); free(a->matches); a->matches=NULL;
+}
+static int path_compare(const void *a,const void *b) { return strcmp(*(char *const *)a,*(char *const *)b); }
+static void build_tree(App *a) {
+    if (a->files.count) qsort(a->files.paths,a->files.count,sizeof(*a->files.paths),path_compare);
+    int parents[33]; for (int i=0;i<33;i++) parents[i]=-1;
+    size_t capacity=0,skip=strlen(a->files.root); if (skip>1) skip++;
+    for (size_t file=0;file<a->files.count;file++) {
+        const char *path=a->files.paths[file],*part=path+skip; int depth=0,parent=-1;
+        while (*part) {
+            const char *slash=strchr(part,'/'); size_t len=slash?(size_t)(slash-path):strlen(path);
+            if (slash && depth<33 && file && parents[depth]>=0) {
+                TreeNode *previous=&a->tree[parents[depth]];
+                if (strlen(previous->path)==len && !strncmp(previous->path,path,len)) { parent=parents[depth++]; part=slash+1; continue; }
+            }
+            if (a->tree_count==capacity) {
+                capacity=capacity?capacity*2:64; TreeNode *next=realloc(a->tree,capacity*sizeof(*next));
+                if (!next) { endwin(); fputs("potok: out of memory\n",stderr); exit(1); } a->tree=next;
+            }
+            char *name=allocate(len+1); memcpy(name,path,len); name[len]=0;
+            int index=(int)a->tree_count++;
+            a->tree[index]=(TreeNode){.path=name,.parent=parent,.depth=depth,.file=slash?-1:(int)file};
+            if (!slash) break;
+            if (depth<33) parents[depth]=index;
+            /* A new branch cannot reuse descendants from the previous one. */
+            for (int k=depth+1;k<33;k++) parents[k]=-1;
+            parent=index; depth++; part=slash+1;
+        }
+    }
+    free(a->matches); a->matches=allocate((a->tree_count+1)*sizeof(*a->matches));
+}
 static void filter_files(App *a) {
     char query[16384]; if (!line_get(&a->file_query,query,sizeof(query))) *query=0;
     a->file_count=0;
     size_t skip=strlen(a->files.root); if (skip>1) skip++;
-    for (size_t i=0;i<a->files.count;i++) if (file_matches(a->files.paths[i]+skip,query)) a->matches[a->file_count++]=i;
+    if (a->file_tree) {
+        bool changed=!a->tree_query || strcmp(a->tree_query,query);
+        if (changed) { free(a->tree_query); a->tree_query=allocate(strlen(query)+1); strcpy(a->tree_query,query); }
+        for (size_t i=0;i<a->tree_count;i++) a->tree[i].match=a->tree[i].file>=0 && file_matches(a->tree[i].path+skip,query);
+        for (size_t i=a->tree_count;i>0;i--) if (a->tree[i-1].match && a->tree[i-1].parent>=0) a->tree[a->tree[i-1].parent].match=true;
+        int hidden_depth=INT_MAX;
+        for (size_t i=0;i<a->tree_count;i++) {
+            TreeNode *node=&a->tree[i]; if (!node->match) continue;
+            if (changed && *query && node->file<0) node->expanded=true;
+            if (node->depth<=hidden_depth) hidden_depth=INT_MAX;
+            if (node->depth>hidden_depth) continue;
+            a->matches[a->file_count++]=i;
+            if (node->file<0 && !node->expanded) hidden_depth=node->depth;
+        }
+    } else for (size_t i=0;i<a->files.count;i++) if (file_matches(a->files.paths[i]+skip,query)) a->matches[a->file_count++]=i;
     a->file_row=MAX(0,MIN(a->file_row,a->file_count-1));
 }
 static void selected_file(App *a,const char *path) {
     if (!line_set(&a->input,path)) { notice(a,"Invalid input encoding"); return; }
     a->field=0; a->modal=ADD;
 }
-static void choose_file(App *a) {
+static void choose_file(App *a,bool tree) {
     char root[PATH_MAX],query[16384],source[16384],selected_path[PATH_MAX],error[1024];
     const char *initial=*a->settings.browse?a->settings.browse:getenv("HOME");
     if (!initial) initial="/tmp";
@@ -447,19 +533,70 @@ static void choose_file(App *a) {
         else { char *slash=strrchr(expanded,'/'); if (slash) { snprintf(query,sizeof(query),"%s",slash+1); if (slash==expanded) slash[1]=0; else *slash=0; if (strlen(expanded)<PATH_MAX && !stat(expanded,&st) && S_ISDIR(st.st_mode)) strcpy(root,expanded); } else snprintf(query,sizeof(query),"%s",expanded); }
     }
     if (access(root,R_OK|X_OK) && *a->downloads && !access(a->downloads,R_OK|X_OK)) snprintf(root,sizeof(root),"%s",a->downloads);
-    def_prog_mode(); mousemask(0,NULL); fputs("\033[?2004l",stdout); fflush(stdout); endwin();
-    void (*previous)(int)=signal(SIGINT,SIG_IGN);
-    int result=picker_fzf(root,query,selected_path,&interrupted,error,sizeof(error));
-    signal(SIGINT,previous);
-    reset_prog_mode(); keypad(stdscr,TRUE); nodelay(stdscr,TRUE); mousemask(BUTTON1_PRESSED|BUTTON4_PRESSED|BUTTON5_PRESSED,NULL);
-    fputs("\033[?2004h",stdout); fflush(stdout); flushinp(); clearok(stdscr,TRUE);
-    if (result==1) { selected_file(a,selected_path); return; }
-    if (result<0) { notice(a,"Error: %s",tr(a,error)); return; }
-    if (result==0) return;
-    files_free(&a->files); free(a->matches); a->matches=NULL;
+    if (!tree) {
+        def_prog_mode(); mousemask(0,NULL); fputs("\033[?2004l",stdout); fflush(stdout); endwin();
+        void (*previous)(int)=signal(SIGINT,SIG_IGN);
+        int result=picker_fzf(root,query,selected_path,&interrupted,error,sizeof(error));
+        signal(SIGINT,previous);
+        reset_prog_mode(); keypad(stdscr,TRUE); nodelay(stdscr,TRUE); mousemask(BUTTON1_PRESSED|BUTTON4_PRESSED|BUTTON5_PRESSED,NULL);
+        fputs("\033[?2004h",stdout); fflush(stdout); flushinp(); clearok(stdscr,TRUE);
+        if (result==1) { selected_file(a,selected_path); return; }
+        if (result<0) { notice(a,"Error: %s",tr(a,error)); return; }
+        if (result==0) return;
+    }
+    clear_files(a);
     if (!files_scan(&a->files,root,error,sizeof(error))) { notice(a,"Error: %s",tr(a,error)); return; }
-    a->matches=allocate((a->files.count+1)*sizeof(*a->matches));
+    a->file_tree=true; build_tree(a);
     a->file_row=a->file_scroll=0; line_set(&a->file_query,query); filter_files(a); a->modal=FILES;
+}
+static void choose_directory(App *a,const char *root) {
+    FileList dirs; char error[1024];
+    if (!directories_scan(&dirs,root,error,sizeof(error))) { notice(a,"Error: %s",tr(a,error)); return; }
+    clear_files(a); a->files=dirs; a->matches=allocate((dirs.count+1)*sizeof(*a->matches));
+    a->modal=DIRECTORIES; a->file_row=a->file_scroll=0; line_set(&a->file_query,""); filter_files(a);
+}
+static void parent_directory(App *a) {
+    char path[PATH_MAX]; snprintf(path,sizeof(path),"%s",a->files.root);
+    char *slash=strrchr(path,'/'); if (!slash) return;
+    if (slash==path) slash[1]=0; else *slash=0;
+    choose_directory(a,path);
+}
+static void start_directory_picker(App *a) {
+    char typed[16384],path[PATH_MAX]; struct stat st;
+    if (!line_get(&a->destination,typed,sizeof(typed)) || !absolute_path(typed,path)) { notice(a,"Download path is too long"); return; }
+    size_t length=strlen(path); while (length>1 && path[length-1]=='/') path[--length]=0;
+    while (stat(path,&st)) {
+        if (errno!=ENOENT) { notice(a,"Error: %s",strerror(errno)); return; }
+        char *slash=strrchr(path,'/'); if (!slash || !slash[1]) return;
+        if (slash==path) slash[1]=0; else *slash=0;
+    }
+    choose_directory(a,path);
+}
+static void poll_opener(App *a) {
+    /* Only folder launchers are asynchronous children; the picker reaps its own. */
+    while (a->openers) {
+        int status; pid_t result=waitpid(-1,&status,WNOHANG);
+        if (!result) return;
+        if (result<0 && errno==EINTR) continue;
+        if (result<0) a->openers=0; else a->openers--;
+        if (result<0 || !WIFEXITED(status) || WEXITSTATUS(status)) notice(a,"Could not open folder (xdg-open)");
+    }
+}
+static void open_folder(App *a,const Torrent *t) {
+    if (a->demo) { notice(a,"Demo"); return; }
+    char path[PATH_MAX]; struct stat st;
+    if (!absolute_path(t->dir,path)) { notice(a,"Download path is too long"); return; }
+    if (stat(path,&st)) { notice(a,"Error: %s",strerror(errno)); return; }
+    if (!S_ISDIR(st.st_mode)) { notice(a,"Error: %s",strerror(ENOTDIR)); return; }
+    pid_t child=fork();
+    if (child<0) { notice(a,"Error: %s",strerror(errno)); return; }
+    if (!child) {
+        if (setsid()<0) _exit(1);
+        int fd=open("/dev/null",O_RDWR); if (fd<0) _exit(1);
+        for (int i=0;i<3;i++) if (dup2(fd,i)<0) _exit(1);
+        closefrom(3); execlp("xdg-open","xdg-open",path,(char *)NULL); _exit(127);
+    }
+    a->openers++;
 }
 static bool limit_value(const char *s,int *n) {
     if (!*s) return false;
@@ -470,14 +607,21 @@ static bool limit_value(const char *s,int *n) {
 }
 static void submit(App *a) {
     if (a->modal==FILES) {
-        if (a->file_count) selected_file(a,a->files.paths[a->matches[a->file_row]]);
+        if (a->file_count) {
+            if (a->file_tree) {
+                TreeNode *node=&a->tree[a->matches[a->file_row]];
+                if (node->file<0) { node->expanded=!node->expanded; filter_files(a); return; }
+                selected_file(a,node->path);
+            } else selected_file(a,a->files.paths[a->matches[a->file_row]]);
+        }
         return;
     }
+    if (a->modal==DIRECTORIES) { if (a->file_count) choose_directory(a,a->files.paths[a->matches[a->file_row]]); return; }
     char input[16384];
     if (!line_get(&a->input,input,sizeof(input))) { notice(a,"Invalid input encoding"); return; }
     int modal=a->modal;
     if (modal==ADD) {
-        if (!*input) { choose_file(a); return; }
+        if (!*input) { choose_file(a,false); return; }
         char *source=input; while (isspace((unsigned char)*source)) source++;
         size_t length=strlen(source); while (length && isspace((unsigned char)source[length-1])) source[--length]=0;
         if (length>=2 && ((source[0]=='\"' && source[length-1]=='\"') || (source[0]=='\'' && source[length-1]=='\''))) { source[length-1]=0; source++; }
@@ -519,13 +663,29 @@ static void key(App *a,int k) {
     if (k=='l' && !a->modal) { a->russian=!a->russian; a->settings.russian=a->russian; save_settings(a); notice(a,"Language: English"); return; }
     if (k==3) { a->quit=true; return; }
     if (a->modal) {
-        if (k==27) { a->modal=a->modal==FILES?ADD:NORMAL; a->pasting=false; return; }
+        if (k==27) { a->modal=(a->modal==FILES||a->modal==DIRECTORIES)?ADD:NORMAL; a->pasting=false; return; }
         if (a->modal==HELP) { if (k=='?' || k=='q' || k=='\n') a->modal=NORMAL; return; }
         if (k=='\n' || k==KEY_ENTER) { submit(a); return; }
         if (a->modal==REMOVE) { if (k==' ' || k==HIT_REMOVE_DATA) a->remove_data=!a->remove_data; return; }
-        if (a->modal==ADD && k==6) { choose_file(a); return; }
+        if (a->modal==ADD && k==6) { if (a->field) start_directory_picker(a); else choose_file(a,false); return; }
+        if (a->modal==ADD && k==20) { choose_file(a,true); return; }
+        if (a->modal==DIRECTORIES && (k==KEY_F(2) || k==HIT_USE_DIR)) {
+            if (!line_set(&a->destination,a->files.root)) { notice(a,"Invalid input encoding"); return; }
+            a->modal=ADD; a->field=1; return;
+        }
+        if (a->modal==DIRECTORIES && (k==KEY_LEFT || k==HIT_PARENT)) { parent_directory(a); return; }
+        if (a->modal==DIRECTORIES && k==KEY_RIGHT) { submit(a); return; }
+        if (a->modal==FILES && a->file_tree && a->file_count && (k==KEY_LEFT||k==KEY_RIGHT)) {
+            TreeNode *node=&a->tree[a->matches[a->file_row]];
+            if (k==KEY_RIGHT && node->file<0) node->expanded=true;
+            else if (k==KEY_LEFT) {
+                if (node->file<0 && node->expanded) node->expanded=false;
+                else if (node->parent>=0) for (int i=0;i<a->file_count;i++) if (a->matches[i]==(size_t)node->parent) { a->file_row=i; break; }
+            }
+            filter_files(a); return;
+        }
         if (a->modal==ADD && (k=='\t' || k==KEY_BTAB)) { a->field=!a->field; return; }
-        if (a->modal==FILES && (k==KEY_UP || k==KEY_DOWN || k==KEY_NPAGE || k==KEY_PPAGE)) {
+        if ((a->modal==FILES||a->modal==DIRECTORIES) && (k==KEY_UP || k==KEY_DOWN || k==KEY_NPAGE || k==KEY_PPAGE)) {
             int d=k==KEY_UP?-1:k==KEY_DOWN?1:k==KEY_NPAGE?5:-5; a->file_row=MAX(0,MIN(a->file_count-1,a->file_row+d)); return;
         }
         Line *line=active_line(a);
@@ -546,14 +706,14 @@ static void key(App *a,int k) {
             while (line->cursor && !iswspace(line->value[line->cursor-1])) line->cursor--;
             memmove(line->value+line->cursor,line->value+end,(line->length-end+1)*sizeof(wchar_t)); line->length-=end-line->cursor;
         }
-        if (a->modal==FILES) filter_files(a);
+        if (a->modal==FILES||a->modal==DIRECTORIES) filter_files(a);
         return;
     }
     Torrent *t=selected(a);
     if (k=='q') a->quit=true;
     else if (k=='?') open_modal(a,HELP);
     else if (k=='a') open_modal(a,ADD);
-    else if (k=='f') { open_modal(a,ADD); choose_file(a); }
+    else if (k=='f') { open_modal(a,ADD); choose_file(a,false); }
     else if (k=='Q') open_modal(a,STOP_DAEMON);
     else if (k=='/') open_modal(a,SEARCH);
     else if (k=='s') open_modal(a,LIMIT_DOWN);
@@ -572,7 +732,8 @@ static void key(App *a,int k) {
         char error[1024]; int down,up; bool slow; client_get_limits(a->engine,&down,&up,&slow);
         if (!client_limits(a->engine,down,up,!slow,error,sizeof(error))) notice(a,"Error: %s",tr(a,error));
         else a->turtle=!slow;    } else if (t) {
-        if (k==' ' && a->detail_focus && a->tab==1) toggle_file(a,a->detail_row);
+        if (k=='\n' || k==KEY_ENTER) open_folder(a,t);
+        else if (k==' ' && a->detail_focus && a->tab==1) toggle_file(a,a->detail_row);
         else if (k==' ' || k=='p') run_action(a,t->hash,t->status?BT_PAUSE:BT_RESUME);
         else if (k=='v') run_action(a,t->hash,BT_VERIFY);
         else if (k=='K' || k=='J') run_action(a,t->hash,k=='K'?BT_UP:BT_DOWN);
@@ -584,19 +745,24 @@ static void mouse(App *a,MEVENT e) {
     if (click) for (int i=a->nhits-1;i>=0;i--) {
         Hit *h=&a->hits[i];
         if (e.x>=h->x && e.x<h->x+h->w && e.y>=h->y && e.y<h->y+h->h) {
-            if (h->key==HIT_BROWSE) choose_file(a);
+            if (h->key==HIT_BROWSE) choose_file(a,false);
+            else if (h->key==HIT_TREE) choose_file(a,true);
+            else if (h->key==HIT_CHOOSE_DIR) start_directory_picker(a);
             else if (h->key==HIT_SOURCE || h->key==HIT_DIRECTORY || h->key==HIT_QUERY) {
                 if (a->modal==ADD) a->field=h->key==HIT_DIRECTORY;
                 Line *line=active_line(a); line->cursor=line->scroll;
                 int target=MAX(0,e.x-h->x-1),cells=0;
                 while (line->cursor<line->length) { int width=MAX(0,wcwidth(line->value[line->cursor])); if (cells+width>target) break; cells+=width; line->cursor++; }
-            } else if (h->key<=-100) { a->file_row=-h->key-100; if (e.bstate&BUTTON1_DOUBLE_CLICKED) submit(a); }
+            } else if (h->key<=-100) {
+                a->file_row=-h->key-100;
+                if ((a->modal==FILES && a->file_tree && a->tree[a->matches[a->file_row]].file<0) || (e.bstate&BUTTON1_DOUBLE_CLICKED)) submit(a);
+            }
             else if (h->key>=300) { a->detail_row=h->key-300; a->detail_focus=true; toggle_file(a,a->detail_row); }
             else key(a,h->key);
             return;
         }
     }
-    if (a->modal==FILES && (e.bstate&(BUTTON4_PRESSED|BUTTON5_PRESSED))) { a->file_row=MAX(0,MIN(a->file_count-1,a->file_row+(e.bstate&BUTTON4_PRESSED?-1:1))); return; }
+    if ((a->modal==FILES||a->modal==DIRECTORIES) && (e.bstate&(BUTTON4_PRESSED|BUTTON5_PRESSED))) { a->file_row=MAX(0,MIN(a->file_count-1,a->file_row+(e.bstate&BUTTON4_PRESSED?-1:1))); return; }
     if (a->modal || a->width<80 || a->height<24) return;
     bool wheel_up=e.bstate&BUTTON4_PRESSED, wheel_down=e.bstate&BUTTON5_PRESSED;
     if (wheel_up || wheel_down) {
@@ -613,7 +779,7 @@ static void input_text(App *a,wchar_t c) {
     Line *line=active_line(a); if (line->length+1>=COUNT(line->value)) return;
     memmove(line->value+line->cursor+1,line->value+line->cursor,(line->length-line->cursor+1)*sizeof(wchar_t));
     line->value[line->cursor++]=c; line->length++;
-    if (a->modal==FILES) filter_files(a);
+    if (a->modal==FILES||a->modal==DIRECTORIES) filter_files(a);
 }
 static void input_event(App *a,wint_t c,bool special) {
     if (special && c==PASTE_BEGIN) { if (!a->modal) open_modal(a,ADD); a->pasting=true; return; }
@@ -670,7 +836,7 @@ static void demo_tick(App *a,double time) {
 }
 static bool cleanup(App *a) {
     client_close(a->engine);
-    bt_details_free(&a->detail); files_free(&a->files); free(a->matches); free(a->items); free(a->visible); return true;
+    bt_details_free(&a->detail); clear_files(a); free(a->items); free(a->visible); return true;
 }
 static void palette(void) {
     if (!has_colors()) return;
@@ -710,7 +876,7 @@ int main(int argc,char **argv) {
         }
         if (!strcmp(argv[i],"--")) { positional=true; continue; }
         if (!strcmp(argv[i],"--help") || !strcmp(argv[i],"-h")) { help=true; continue; }
-        if (!strcmp(argv[i],"--version")) { puts("potok 0.3.3"); return 0; }
+        if (!strcmp(argv[i],"--version")) { puts("potok 0.4.0"); return 0; }
         if (!strcmp(argv[i],"--demo")) a.demo=true;
         else if (!strcmp(argv[i],"--daemon")) daemon=true;
         else if (!strcmp(argv[i],"--background")) background=true;
@@ -758,6 +924,7 @@ int main(int argc,char **argv) {
     if (a.demo) demo_init(&a);
     double last=now(),next_draw=0;
     while (!a.quit && !interrupted) {
+        poll_opener(&a);
         double time=now(),dt=MIN(time-last,.1); last=time;
         if (a.demo) demo_tick(&a,time); else engine_tick(&a);
         for (int i=0;i<a.count;i++) a.items[i].shown+=(a.items[i].done-a.items[i].shown)*(1-exp(-dt*8));

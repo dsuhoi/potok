@@ -9,6 +9,7 @@ extern "C" {
 #endif
 typedef struct { char **paths; size_t count; bool limited; char root[PATH_MAX]; } FileList;
 bool files_scan(FileList *list,const char *root,char *error,size_t cap);
+bool directories_scan(FileList *list,const char *root,char *error,size_t cap);
 void files_free(FileList *list);
 bool file_matches(const char *path,const char *query);
 /* 1: selected, 0: cancelled, 2: fzf unavailable, -1: error. */

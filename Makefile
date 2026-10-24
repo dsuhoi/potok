@@ -2,7 +2,7 @@ CC ?= cc
 CXX ?= c++
 PKG_CONFIG ?= pkg-config
 PREFIX ?= /usr/local
-VERSION = 0.3.3
+VERSION = 0.4.0
 CPPFLAGS += $(shell $(PKG_CONFIG) --cflags ncursesw)
 CFLAGS ?= -Os
 CFLAGS += -std=c11 -Wall -Wextra -Wpedantic

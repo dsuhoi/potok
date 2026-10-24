@@ -45,6 +45,12 @@ static void test_model_and_actions(void) {
     assert(a.count==6 && a.total==6);
     a.selected=1; char keep[65]; strcpy(keep,selected(&a)->hash); refilter(&a,keep); assert(a.selected==1);
     a.filter=1; refilter(&a,NULL); assert(a.total==3);
+    a.filter=2; refilter(&a,NULL); assert(a.total==2);
+    Torrent finished={.status=0,.metadata=1,.done=1};
+    assert(filter_matches(&finished,2) && filter_matches(&finished,3) && !filter_matches(&finished,1));
+    finished.status=4; assert(filter_matches(&finished,2) && !filter_matches(&finished,1));
+    finished.done=.9999; assert(!filter_matches(&finished,2) && filter_matches(&finished,1));
+    finished.done=1; finished.metadata=0; assert(!filter_matches(&finished,2));
     a.filter=0; strcpy(a.query,"FEDORA"); refilter(&a,NULL); assert(a.total==1 && strstr(selected(&a)->name,"Fedora"));
     strcpy(a.query,"missing"); refilter(&a,NULL); assert(!a.total && !selected(&a));
     *a.query=0; a.selected=0; refilter(&a,NULL);
@@ -133,13 +139,32 @@ static void test_ui(bool screenshots) {
         key(&a,'d'); draw(&a,a.demo_start+1); snapshot("artifacts/potok-remove-ru.svg");
         key(&a,' '); draw(&a,a.demo_start+1); snapshot("artifacts/potok-delete-ru.svg"); key(&a,27);
     }
-    if (screenshots) {
-        open_modal(&a,ADD); set_input(&a,L"~/Downloads/ubuntu"); draw(&a,a.demo_start+1); snapshot("artifacts/potok-add-ru.svg");
+    {
+        open_modal(&a,ADD); set_input(&a,L"~/Downloads/ubuntu"); draw(&a,a.demo_start+1);
+        if (screenshots) snapshot("artifacts/potok-add-ru.svg");
         a.files.paths=allocate(3*sizeof(*a.files.paths)); a.files.count=3; strcpy(a.files.root,"/home/user/Downloads");
-        const char *paths[]={"/home/user/Downloads/debian-13.1.0-amd64-netinst.torrent","/home/user/Downloads/Fedora-Workstation-Live-x86_64.torrent","/home/user/Downloads/ubuntu-24.04.3-desktop-amd64.torrent"};
+        const char *paths[]={"/home/user/Downloads/Linux/Debian/debian-13.7.0-amd64-netinst.torrent","/home/user/Downloads/Linux/Fedora-Workstation-Live-x86_64.torrent","/home/user/Downloads/BSD/openbsd-7.8.torrent"};
         for (size_t i=0;i<COUNT(paths);i++) a.files.paths[i]=strdup(paths[i]);
-        a.matches=allocate(3*sizeof(*a.matches)); a.modal=FILES; filter_files(&a); draw(&a,a.demo_start+1); snapshot("artifacts/potok-files-ru.svg");
-        key(&a,27); key(&a,27); draw(&a,a.demo_start+1);
+        a.file_tree=true; build_tree(&a); a.modal=FILES; filter_files(&a); draw(&a,a.demo_start+1);
+        assert(a.file_count==2);
+        e=(MEVENT){.x=24,.y=13,.bstate=BUTTON1_PRESSED}; mouse(&a,e); assert(a.file_count==3);
+        for (size_t i=0;i<a.tree_count;i++) a.tree[i].expanded=true;
+        filter_files(&a); draw(&a,a.demo_start+1);
+        if (screenshots) snapshot("artifacts/potok-files-ru.svg");
+        a.russian=false; draw(&a,a.demo_start+1); if (screenshots) snapshot("artifacts/potok-tree.svg");
+        line_set(&a.file_query,"debian"); filter_files(&a); assert(a.file_count==3);
+        draw(&a,a.demo_start+1); if (screenshots) snapshot("artifacts/potok-tree-search.svg");
+        a.russian=true; draw(&a,a.demo_start+1); if (screenshots) snapshot("artifacts/potok-tree-search-ru.svg");
+        a.file_row=0; key(&a,KEY_LEFT); assert(a.file_count==1); key(&a,KEY_RIGHT); assert(a.file_count==3);
+        clear_files(&a); strcpy(a.files.root,"/home/user/Downloads");
+        a.files.count=2; a.files.paths=allocate(2*sizeof(*a.files.paths));
+        a.files.paths[0]=strdup("/home/user/Downloads/Linux"); a.files.paths[1]=strdup("/home/user/Downloads/Видео");
+        a.matches=allocate(2*sizeof(*a.matches)); a.modal=DIRECTORIES; line_set(&a.file_query,""); filter_files(&a); draw(&a,a.demo_start+1);
+        if (screenshots) snapshot("artifacts/potok-folders-ru.svg");
+        bool choose=false;
+        for (int i=0;i<a.nhits;i++) if (a.hits[i].key==HIT_USE_DIR) { e=(MEVENT){.x=a.hits[i].x,.y=a.hits[i].y,.bstate=BUTTON1_PRESSED}; mouse(&a,e); choose=true; break; }
+        assert(choose && a.modal==ADD && !wcscmp(a.destination.value,L"/home/user/Downloads"));
+        key(&a,27); draw(&a,a.demo_start+1);
     }
     for (int i=0;i<a.nhits;i++) if (a.hits[i].key==201) {
         assert(a.hits[i].w==5); e=(MEVENT){.x=a.hits[i].x+4,.y=a.hits[i].y,.bstate=BUTTON1_PRESSED}; mouse(&a,e); break;
@@ -150,6 +175,9 @@ static void test_ui(bool screenshots) {
     resizeterm(24,80); open_modal(&a,SEARCH); set_input(&a,L"Русский тест"); draw(&a,a.demo_start+2);
     assert(mvinnwstr(7,6,title,5)!=ERR && !wcsncmp(title,L"ПОИСК",5));
     if (screenshots) snapshot("artifacts/potok-search.svg");
+    open_modal(&a,ADD); draw(&a,a.demo_start+2);
+    if (screenshots) snapshot("artifacts/potok-add-small.svg");
+    key(&a,27);
     key(&a,27); open_modal(&a,HELP); draw(&a,a.demo_start+2);
     if (screenshots) snapshot("artifacts/potok-ru-help.svg");
     key(&a,27);
@@ -219,7 +247,15 @@ static void test_terminal(bool real,bool cli) {
                 assert(strstr(buffer,".torrent"));
                 assert(write(master,"\r",1)==1); terminal_read(master,buffer,sizeof(buffer),400);
             }
-            assert(write(master,"\t\n",2)==2); terminal_read(master,buffer,sizeof(buffer),700);
+            assert(write(master,"\024",1)==1); terminal_read(master,buffer,sizeof(buffer),250);
+            assert(strstr(buffer,"FILES") && strstr(buffer,".torrent"));
+            assert(write(master,"\n",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
+            assert(strstr(buffer,"ADD TORRENT"));
+            assert(write(master,"\t\006",2)==2); terminal_read(master,buffer,sizeof(buffer),150);
+            assert(strstr(buffer,"SAVE TO"));
+            assert(write(master,"\033OQ",3)==3); terminal_read(master,buffer,sizeof(buffer),150);
+            assert(strstr(buffer,"ADD TORRENT"));
+            assert(write(master,"\n",1)==1); terminal_read(master,buffer,sizeof(buffer),700);
         }
         assert(strstr(buffer,"payload.bin"));
         char error[1024]={0}; Client *probe=client_open(state,downloads,false,error,sizeof(error)); assert(probe);
@@ -308,7 +344,48 @@ static void test_settings_and_files(void) {
     a.modal=FILES; line_set(&a.file_query,"second"); filter_files(&a); assert(a.file_count==1); submit(&a);
     assert(a.modal==ADD && wcsstr(a.input.value,L"nested/second.torrent") && !strcmp(a.settings.browse,settings.browse));
     assert(settings_load(&loaded,config,true,error,sizeof(error)) && !strcmp(loaded.browse,settings.browse));
+    a.modal=FILES; a.file_tree=true; build_tree(&a); line_set(&a.file_query,""); filter_files(&a);
+    assert(a.file_count==4 && a.tree_count==5);
+    int directory=-1; for (int i=0;i<a.file_count;i++) if (a.tree[a.matches[i]].file<0) directory=i;
+    assert(directory>=0); a.file_row=directory; key(&a,KEY_RIGHT); assert(a.file_count==5);
+    key(&a,KEY_DOWN); assert(a.tree[a.matches[a.file_row]].file>=0); key(&a,KEY_LEFT); assert(a.file_row==directory);
+    key(&a,KEY_LEFT); assert(a.file_count==4);
+    line_set(&a.file_query,"second"); filter_files(&a); assert(a.file_count==2 && a.tree[a.matches[0]].file<0);
+    a.file_row=1; submit(&a); assert(a.modal==ADD && wcsstr(a.input.value,L"nested/second.torrent"));
+    char chosen[16384]; assert(line_get(&a.input,chosen,sizeof(chosen)));
+    choose_directory(&a,settings.browse); assert(a.modal==DIRECTORIES);
+    line_set(&a.file_query,"nested"); filter_files(&a); assert(a.file_count==1); submit(&a);
+    assert(a.modal==DIRECTORIES && strstr(a.files.root,"/nested") && !a.file_count);
+    key(&a,KEY_F(2)); assert(a.modal==ADD && a.field==1 && wcsstr(a.destination.value,L"/nested"));
+    assert(line_get(&a.input,path,sizeof(path)) && !strcmp(path,chosen));
+    start_directory_picker(&a); key(&a,KEY_LEFT); assert(!strcmp(a.files.root,settings.browse));
+    key(&a,27); assert(a.modal==ADD && wcsstr(a.destination.value,L"/nested"));
+    Line destination; double available; assert(line_set(&destination,root) && destination_space(&destination,&available) && available>=0);
+    snprintf(path,sizeof(path),"%s/not-created/child",root); assert(line_set(&destination,path) && destination_space(&destination,&available));
+    snprintf(path,sizeof(path),"%s/not-created/child/",root); assert(line_set(&destination,path) && destination_space(&destination,&available));
+    snprintf(path,sizeof(path),"%s/ignore.txt/child",settings.browse); assert(line_set(&destination,path) && !destination_space(&destination,&available));
     assert(cleanup(&a)); assert(!nftw(root,delete_test,16,FTW_DEPTH|FTW_PHYS));
+}
+static void test_open_folder(void) {
+    char root[]="/tmp/potok-open-XXXXXX",script[PATH_MAX],log[PATH_MAX],directory[PATH_MAX]; assert(mkdtemp(root));
+    snprintf(script,sizeof(script),"%s/xdg-open",root); snprintf(log,sizeof(log),"%s/argument",root);
+    snprintf(directory,sizeof(directory),"%s/папка ; echo",root); assert(!mkdir(directory,0700));
+    FILE *f=fopen(script,"w"); assert(f); fputs("#!/bin/sh\nprintf '%s' \"$1\" > \"$POTOK_OPEN_LOG\"\nexit \"${POTOK_OPEN_EXIT:-0}\"\n",f); fclose(f); assert(!chmod(script,0700));
+    char *path=strdup(getenv("PATH")); assert(path); assert(!setenv("PATH",root,1)); assert(!setenv("POTOK_OPEN_LOG",log,1));
+    Torrent torrent={0}; assert(strlen(directory)<sizeof(torrent.dir)); strcpy(torrent.dir,directory);
+    int index=0; App a={.items=&torrent,.visible=&index,.total=1};
+    for (int failure=0;failure<3;failure++) {
+        if (failure==1) assert(!setenv("POTOK_OPEN_EXIT","1",1));
+        if (failure==2) assert(!unlink(script));
+        key(&a,KEY_ENTER); assert(a.openers==1);
+        if (!failure) { key(&a,KEY_ENTER); assert(a.openers==2); }
+        double deadline=now()+3; while (a.openers && now()<deadline) { poll_opener(&a); struct timespec wait={0,1000000}; nanosleep(&wait,NULL); }
+        assert(!a.openers);
+        if (failure) assert(strstr(a.notice,"xdg-open"));
+        else { assert(!*a.notice); char actual[PATH_MAX]={0}; f=fopen(log,"r"); assert(f); assert(fread(actual,1,sizeof(actual)-1,f)==strlen(directory)); fclose(f); assert(!strcmp(actual,directory)); }
+    }
+    assert(!setenv("PATH",path,1)); free(path); unsetenv("POTOK_OPEN_LOG"); unsetenv("POTOK_OPEN_EXIT");
+    assert(!nftw(root,delete_test,16,FTW_DEPTH|FTW_PHYS));
 }
 static void test_editor(void) {
     char path[PATH_MAX],expected[PATH_MAX];
@@ -336,6 +413,7 @@ int main(int argc,char **argv) {
     test_languages(); puts("ok · EN/RU, Unicode, format arguments");
     test_model_and_actions(); puts("ok · filters, delete confirmation, input, limits");
     test_settings_and_files(); puts("ok · private settings, atomic save, fuzzy file search, symlinks");
+    test_open_folder(); puts("ok · open folder: spaces, Unicode, shell characters, failure / missing xdg-open");
     test_editor(); puts("ok · stable input viewport, fields, bracketed paste");
     test_ui(argc>1 && !strcmp(argv[1],"--snapshots")); puts("ok · rendering, transparent background, resize, mouse, modals");
     test_terminal(false,false); test_terminal(true,false); test_terminal(true,true); puts("ok · PTY: CLI, paste, remove/keep, checkbox delete complete/partial files, mouse, background, stop");

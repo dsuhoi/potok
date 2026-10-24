@@ -50,6 +50,23 @@ bool files_scan(FileList *list,const char *root,char *error,size_t cap) {
     if (!walk(&w,list->root,0)) { files_free(list); snprintf(error,cap,"Out of memory"); return false; }
     list->limited=w.limited; if (list->count) qsort(list->paths,list->count,sizeof(*list->paths),compare); return true;
 }
+bool directories_scan(FileList *list,const char *root,char *error,size_t cap) {
+    memset(list,0,sizeof(*list)); if (!root_path(root,list->root,error,cap)) return false;
+    DIR *dir=opendir(list->root);
+    if (!dir) { snprintf(error,cap,"%s: %s",root,strerror(errno)); return false; }
+    struct dirent *entry; bool ok=true;
+    while ((entry=readdir(dir))) {
+        if (!strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
+        char path[PATH_MAX]; struct stat st;
+        int n=snprintf(path,sizeof(path),"%s%s%s",list->root,!strcmp(list->root,"/")?"":"/",entry->d_name);
+        if (n<0 || n>=(int)sizeof(path)) { list->limited=true; continue; }
+        if (!stat(path,&st) && S_ISDIR(st.st_mode) && !collect(path,list)) { ok=false; break; }
+    }
+    closedir(dir);
+    if (!ok) { files_free(list); snprintf(error,cap,"Out of memory"); return false; }
+    if (list->count) qsort(list->paths,list->count,sizeof(*list->paths),compare);
+    return true;
+}
 void files_free(FileList *list) { for (size_t i=0;i<list->count;i++) free(list->paths[i]); free(list->paths); memset(list,0,sizeof(*list)); }
 bool file_matches(const char *path,const char *query) {
     for (;*query;query++) {
