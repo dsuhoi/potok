@@ -22,6 +22,7 @@ OBJECTS = potok.o engine.o service.o settings.o picker.o
 SOURCE_FILES = Makefile README.md README.ru.md LICENSE LICENSE.libtorrent potok.1 \
 	potok.c engine.cpp engine.h lang.h service.c service.h settings.c settings.h \
 	picker.c picker.h tests/test.c tests/engine_test.cpp tests/swarm_probe.c
+SOURCE_FILES += $(wildcard docs/assets/*.svg docs/assets/*.gif)
 
 .PHONY: all clean test sanitize bundle install source
 all: potok
@@ -60,8 +61,9 @@ sanitize: potok tests/test-sanitize tests/engine-sanitize
 	ASAN_OPTIONS=detect_leaks=1 ./tests/test-sanitize
 	ASAN_OPTIONS=detect_leaks=1 ./tests/engine-sanitize
 bundle: potok
-	mkdir -p dist/potok/lib
+	mkdir -p dist/potok/lib dist/potok/docs
 	cp README.md README.ru.md LICENSE LICENSE.libtorrent potok.1 dist/potok/
+	cp -a docs/assets dist/potok/docs/
 	$(CXX) $(OBJECTS) $(LDFLAGS) -Wl,-rpath,'$$ORIGIN/lib' $(LDLIBS) -s -o dist/potok/potok
 	cp -a $(shell $(TORRENT_PC) --variable=libdir libtorrent-rasterbar)/libtorrent-rasterbar.so* dist/potok/lib/
 	strip dist/potok/potok
@@ -70,6 +72,8 @@ install: potok
 	install -Dm644 LICENSE "$(DESTDIR)$(PREFIX)/share/licenses/potok/LICENSE"
 	install -Dm644 README.md "$(DESTDIR)$(PREFIX)/share/doc/potok/README.md"
 	install -Dm644 README.ru.md "$(DESTDIR)$(PREFIX)/share/doc/potok/README.ru.md"
+	install -d "$(DESTDIR)$(PREFIX)/share/doc/potok/docs/assets"
+	install -m644 docs/assets/* "$(DESTDIR)$(PREFIX)/share/doc/potok/docs/assets/"
 	install -Dm644 potok.1 "$(DESTDIR)$(PREFIX)/share/man/man1/potok.1"
 source:
 	mkdir -p dist

@@ -1,170 +1,145 @@
-# Potok
+<p align="center">
+  <img src="docs/assets/logo.svg" width="76" height="76" alt="">
+</p>
+<h1 align="center">Potok</h1>
+<p align="center">A BitTorrent client for the terminal.</p>
+<p align="center">
+  <a href="#build">Build</a> · <a href="#controls">Controls</a> · <a href="#settings">Settings</a> · <a href="README.ru.md">Документация</a>
+</p>
 
-A compact terminal BitTorrent client with mouse support, animated progress,
-English/Russian UI and a background worker that keeps downloading when you
-close the interface.
+![Potok showing transfers, completed downloads and file details](docs/assets/transfers.gif)
 
-Written in C11, with a C++17 adapter to libtorrent-rasterbar. No external
-Transmission service is needed. [Русская документация](README.ru.md).
+<p align="center"><sub>Potok in demo mode. Transfers shown here are sample data.</sub></p>
 
-## Build
+Add a magnet link, a local `.torrent`, or an HTTP(S) torrent URL. Use the keyboard
+or mouse to pause transfers, select files and inspect peers. Closing the terminal
+leaves the downloads running.
+
+## <img src="docs/assets/terminal.svg" width="22" height="22" alt=""> Build
 
 ```sh
 # Arch Linux
-sudo pacman -S --needed base-devel ncurses libtorrent-rasterbar boost
+sudo pacman -S --needed base-devel pkgconf ncurses boost libtorrent-rasterbar
 
 # Debian / Ubuntu
 sudo apt install build-essential pkg-config libncurses-dev libtorrent-rasterbar-dev
 
 make -j2
 ./potok
-./potok path/to/file.torrent
 ```
 
-Runtime libraries: ncursesw, libtorrent-rasterbar, OpenSSL and the system C/C++
-runtime. Boost headers are needed to build. `fzf` is optional; the file picker
-has a built-in fallback. Python, CMake, a web browser and a separate torrent
-service are not required to build or run Potok. Dependencies are supplied by
-the distribution and are not vendored in this repository.
+The interface is C11; the libtorrent adapter is C++17. Runtime libraries are
+ncursesw, libtorrent-rasterbar, OpenSSL and the system C/C++ runtime. Boost
+headers are required to build. Optional tools: `fzf` for file search and
+`xdg-open` for opening download folders.
 
-The stripped 0.3.1 executable is approximately 1.04 MiB. On an Intel i5-8365U
-with GCC 16.2.1, a clean `make -j2` took 36 seconds; rebuilding only the C UI
-took 0.94 seconds. Idle TUI + worker used about 27 MiB of combined RSS
-(shared library pages are counted in both processes).
-These are single-run local observations, not cross-machine benchmarks.
+Linux with libtorrent 2.1.2 is tested. Use a terminal of at least 80×24;
+108×36 or larger leaves more room for details. Potok uses the terminal background,
+including its transparency.
 
-Linux x86_64 with libtorrent 2.1.2 is tested. The terminal must be at least
-80×24. The interface uses the terminal's default background, so your terminal's
-transparency remains visible.
+`sudo make install` installs to `/usr/local`. For packaging, use
+`make DESTDIR="$PWD/stage" PREFIX=/usr install`. `make source` builds a source
+archive; `make bundle` creates `dist/potok/` with a copy of libtorrent. The bundle
+still requires compatible system libraries.
 
-Install into `/usr/local`, or stage an installation for a package:
+An Arch [PKGBUILD](packaging/aur/potok-git/PKGBUILD) is included. It has not been
+published to AUR.
+
+## <img src="docs/assets/folder.svg" width="22" height="22" alt=""> Find a torrent
 
 ```sh
-sudo make install
-make DESTDIR="$PWD/stage" PREFIX=/usr install
+potok path/to/file.torrent
+potok "$HOME/Downloads/my file.torrent"
+potok --background file.torrent
 ```
 
-`make` builds the application only. Tests, source archives and portable bundles
-are separate targets. `make source` creates `dist/potok-0.4.0.tar.gz`;
-`make bundle` creates `dist/potok/` with a copy of libtorrent. The portable bundle
-still needs compatible system ncurses, OpenSSL, C++ runtime and glibc.
+Press `a` to paste a link or choose a file. The form shows the destination and
+available disk space. `Tab` switches fields; `Enter` adds the torrent.
 
-## Use
+![Searching torrent files by directory and filename](docs/assets/search.gif)
+
+`Ctrl-T` opens the directory tree. Type to filter results, use `← →` or click to
+fold and unfold branches, then `Enter` to select a file. `f` opens fzf when it is
+installed, otherwise the built-in tree. Both search the home directory by default.
+Set `browse_dir` to change the root, or type a directory in the source field
+before searching. The tree appears after scanning; symlink directories are skipped.
+Traversal is limited to 32 levels and 100,000 torrent files.
+
+Click **Choose folder**, or press `Ctrl-F` in the destination field, to browse
+folders. `Enter` enters a folder, `←` goes up and `F2` selects the current one.
+
+## <img src="docs/assets/transfers.svg" width="22" height="22" alt=""> Controls
 
 | Key | Action |
 |---|---|
-| `a` | Add a magnet, HTTP(S) `.torrent` URL, or local `.torrent` |
-| `f` / `Ctrl-F` in the source field | Search `.torrent` files using fzf or the built-in tree |
-| `Ctrl-T` in Add | Search `.torrent` files as a directory tree |
-| `Ctrl-F` in the destination field | Choose a download folder |
-| `Tab`, `Enter`, `Esc` | Switch fields, submit, cancel |
 | `↑ ↓` / `j k` | Select a torrent |
-| `Enter` in the main screen | Open the selected torrent's download directory |
-| `p` / `Space` | Pause / resume |
-| `← →` | Overview, files, peers, trackers |
-| `/` | Filter by name |
-| `s` / `t` | Speed limits / slow mode |
-| `v` | Verify downloaded data |
-| `d` / `D` | Open removal dialog with an optional data-deletion checkbox |
-| `l` | Switch English / Russian; the setting is saved |
-| `q` / `Ctrl-C` | Close TUI; continue downloading |
-| `Q` | Stop downloads and quit after confirmation |
-| `?` | Help |
+| `a` / `f` | Add a source / search torrent files |
+| `p` / `Space` | Pause or resume |
+| `Enter` | Open the download folder |
+| `Tab` / `← →` | Switch panes / detail tabs |
+| `1` … `5` / `/` | Filter by state / name |
+| `s` / `t` | Set speed limits / toggle slow mode |
+| `v` / `K J` | Verify data / move in queue |
+| `d` | Remove a torrent; optionally delete its files |
+| `q` / `Ctrl-C` | Close the interface; keep downloading |
+| `Q` | Stop downloads after confirmation |
+| `?` | Show all shortcuts |
 
-The mouse selects rows, tabs and buttons; the wheel scrolls. Source fields
-support UTF-8, bracketed paste, cursor editing and paths with spaces.
+The mouse selects rows, tabs, buttons and file checkboxes; the wheel scrolls.
+**Completed** includes finished torrents on pause. **Seeding** means a torrent
+offers its completed data to other peers.
 
-**Completed** includes finished downloads even when paused. Their rows show
-**Ready** instead of an ETA; uploading remains visible as the Seeding status.
-Enter opens the download directory through optional `xdg-open` (`xdg-utils`).
+In the removal dialog, leave **Delete downloaded files** unchecked to keep the
+data. Checking it also deletes complete or partial downloads, without a recycle
+bin. Other files and the original imported `.torrent` are kept.
 
-The add form shows **Save to** and the available disk space. Click **Choose
-folder**, or press Ctrl-F in that field: Enter / Right enters a directory,
-Left goes to its parent, and F2 selects the current directory. Esc returns
-without changing the destination. You can also type a new directory path;
-free space is then measured on its nearest existing parent.
+## <img src="docs/assets/background.svg" width="22" height="22" alt=""> Background downloads
 
-The removal dialog defaults to keeping files. Check **Delete downloaded files**
-using Space or the mouse to also delete complete or partial downloads, then
-confirm with Enter. Esc cancels. The checkbox resets for each removal.
-Deletion bypasses the recycle bin and only removes this torrent's data;
-other files in the download directory and the original imported `.torrent`
-file are kept.
-
-The picker searches your whole home directory by default and streams matches
-into fzf while scanning. Choosing a file keeps that search root for the next
-search. Set `browse_dir` in the config to use another root, or type a directory
-in the source field before pressing `Ctrl-F` for a single scoped search.
-Symlink directories are not followed. Traversal is capped at 32 levels and
-100,000 torrent files.
-
-Ctrl-T opens the built-in tree even if fzf is installed. Type to filter the
-results: matching files keep their parent directories, which expand while
-searching. With an empty query, use Left / Right, Enter, or click a directory
-to fold or unfold it. Enter or double-click selects a file. Only directories
-containing torrent files appear. The tree uses the same search root and limits
-as file search and is built after scanning that root.
-
-`potok path/to/file.torrent` adds the file and opens the interface. Relative
-paths, spaces and Unicode filenames are supported. Quote paths containing
-spaces; use `potok -- -file.torrent` for a name beginning with a dash.
-Only one source may be passed. `potok --background file.torrent` adds it
-without opening TUI.
+Potok starts its worker automatically. `q` closes the interface, and reopening
+`potok` reconnects to the same worker. To manage it without the interface:
 
 ```sh
 potok --background
 potok --status
 potok --stop
-potok --lang ru
-potok --demo
 ```
 
-Settings are created in `$XDG_CONFIG_HOME/potok/config` or
-`~/.config/potok/config`. State is stored in `$XDG_DATA_HOME/potok` or
-`~/.local/share/potok`; downloads default to `~/Downloads`.
-`--config-dir`, `--state-dir` and `--download-dir` select other directories.
-One worker owns each state directory. Use the same profile options for status
-and stop commands. No boot-time service is installed.
+No boot service is installed. After a reboot, run `potok` or `potok --background`
+to resume saved transfers. Use the same profile options for start, status and stop.
 
-## Arch / AUR packaging
+## Settings
 
-The [potok-git recipe](packaging/aur/potok-git/PKGBUILD) builds from this
-repository and uses system libraries. It does not bundle libtorrent.
-`SKIP` is used for the Git source, as usual for VCS packages.
+Downloads go to `~/Downloads`. Settings live in `~/.config/potok/config`;
+state lives in `~/.local/share/potok`. `XDG_CONFIG_HOME` and `XDG_DATA_HOME` are
+respected. A configuration uses absolute paths:
 
-```sh
-cd packaging/aur/potok-git
-makepkg -si
+```ini
+download_dir=/home/user/Downloads
+state_dir=/home/user/.local/share/potok
+browse_dir=/home/user
 ```
 
-The recipe is prepared for submission; inclusion in AUR requires a maintainer
-account and an associated SSH key. This README does not imply that it has
-already been published to AUR.
+The destination selected in the add form is saved after a successful import.
+`--download-dir`, `--state-dir` and `--config-dir` override the defaults.
+Changing `state_dir` selects a different profile; it does not move downloads.
+Keep the state directory private: resume files can contain tracker addresses.
+Press `l` to change and save the interface language; `--lang en|ru` overrides it for one run.
 
-## Checks
+## Development
 
 ```sh
 make test
 make sanitize
-./tests/test --snapshots
 ```
 
-Tests cover the C UI, keyboard and mouse input through a real PTY, languages,
-private settings, file search, and real loopback BitTorrent transfers, including
-magnet metadata, pause/resume, restart, file selection, deletion and downloads
-with no UI attached. Public swarms are excluded from automatic tests.
+Tests cover terminal input, mouse events, file search, settings and BitTorrent
+transfers over loopback, including worker restart and deletion. Public swarms
+are excluded from automatic tests. A manual Debian netinst download on
+2026-10-24 matched the official SHA-256.
 
-Manual public-swarm testing on 2026-10-24 downloaded the full 756 MiB Debian
-netinst image and matched its official SHA-256; a separate Debian Edu magnet
-received metadata and payload from public peers. Worker restart and terminal
-closure were also checked.
+Local peers may bypass global rate limits under libtorrent defaults, and paused
+speed statistics can take a few seconds to decay. Torrent creation and tracker
+editing are not implemented. macOS, private trackers and extended soak tests
+have not been validated.
 
-Known limits: local peers can bypass global rate limits under libtorrent's
-default peer classes; paused speed statistics may take a few seconds to decay.
-Torrent creation and tracker editing are not implemented. Private trackers,
-macOS and long-running soak tests have not been validated.
-
-## License
-
-[MIT](LICENSE). libtorrent-rasterbar is distributed separately under
-[BSD-3-Clause](LICENSE.libtorrent).
+[MIT](LICENSE). libtorrent-rasterbar uses [BSD-3-Clause](LICENSE.libtorrent).
