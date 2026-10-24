@@ -2,7 +2,7 @@
 pkgname=potok-git
 pkgver=0.4.0
 pkgrel=1
-pkgdesc='Terminal BitTorrent client with a persistent background worker, mouse support and EN/RU'
+pkgdesc='BitTorrent client for the terminal'
 arch=('x86_64')
 url='https://github.com/dsuhoi/potok'
 license=('MIT')
