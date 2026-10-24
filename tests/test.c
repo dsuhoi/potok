@@ -51,6 +51,11 @@ static void test_model_and_actions(void) {
     finished.status=4; assert(filter_matches(&finished,2) && !filter_matches(&finished,1));
     finished.done=.9999; assert(!filter_matches(&finished,2) && filter_matches(&finished,1));
     finished.done=1; finished.metadata=0; assert(!filter_matches(&finished,2));
+    finished=(Torrent){.status=6,.metadata=1,.done=1}; assert(!progress_active(&finished));
+    finished.status=4; assert(!progress_active(&finished));
+    finished.done=.99; assert(progress_active(&finished));
+    finished.status=2; assert(progress_active(&finished));
+    finished.status=0; assert(!progress_active(&finished));
     a.filter=0; strcpy(a.query,"FEDORA"); refilter(&a,NULL); assert(a.total==1 && strstr(selected(&a)->name,"Fedora"));
     strcpy(a.query,"missing"); refilter(&a,NULL); assert(!a.total && !selected(&a));
     *a.query=0; a.selected=0; refilter(&a,NULL);
@@ -78,7 +83,7 @@ static void xml(FILE *f,const wchar_t *s) {
 }
 static void snapshot(const char *path) {
     FILE *f=fopen(path,"w"); assert(f);
-    fprintf(f,"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\"><g font-family=\"DejaVu Sans Mono,monospace\" font-size=\"14\">",COLS*9+32,LINES*19+32);
+    fprintf(f,"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\"><g font-family=\"JetBrainsMono Nerd Font Mono,monospace\" font-size=\"14\">",COLS*9+32,LINES*19+32);
     const char *colors[]={"#d0d0d0","#d0d0d0","#808080","#5fffaf","#87d7ff","#ffd75f","#ffaf87","#d0d0d0","#d0d0d0","#5fffaf","#ffffff"};
     for (int y=0;y<LINES;y++) for (int x=0;x<COLS;x++) {
         cchar_t cell; wchar_t s[CCHARW_MAX]; attr_t attrs; short pair;
@@ -101,6 +106,17 @@ static void test_ui(bool screenshots) {
     progress(0,0,9,-1,true,false,0.6); cchar_t frame2; assert(mvin_wch(0,0,&frame2)==OK);
     wchar_t one[CCHARW_MAX],two[CCHARW_MAX]; attr_t attrs; short pair;
     assert(getcchar(&frame1,one,&attrs,&pair,NULL)==OK && getcchar(&frame2,two,&attrs,&pair,NULL)==OK && wcscmp(one,two));
+    cchar_t complete[9]; a.items[1].shown=.94; draw(&a,a.demo_start+1);
+    for (int i=0;i<9;i++) assert(mvin_wch(a.table_y+3,a.width-37+i,&complete[i])==OK);
+    draw(&a,a.demo_start+1.6);
+    for (int i=0;i<9;i++) {
+        cchar_t cell; short after; assert(mvin_wch(a.table_y+3,a.width-37+i,&cell)==OK);
+        assert(getcchar(&complete[i],one,&attrs,&pair,NULL)==OK && getcchar(&cell,two,&attrs,&after,NULL)==OK);
+        assert(pair==after && !wcscmp(one,two) && !wcscmp(one,L"█"));
+    }
+    wchar_t percent[8]; assert(mvinnwstr(a.table_y+3,a.width-27,percent,4)!=ERR && !wcscmp(percent,L"100%"));
+    Torrent original=a.items[0]; a.items[0].done=a.items[0].shown=.99999; draw(&a,a.demo_start+1);
+    assert(mvinnwstr(a.table_y,a.width-27,percent,4)!=ERR && !wcscmp(percent,L" 99%")); a.items[0]=original;
     draw(&a,a.demo_start+1);
     MEVENT e={.x=30,.y=a.table_y+3,.bstate=BUTTON1_PRESSED}; mouse(&a,e); assert(a.selected==1);
     e=(MEVENT){.x=30,.y=a.table_y,.bstate=BUTTON5_PRESSED}; mouse(&a,e); assert(a.selected==2);
@@ -117,6 +133,11 @@ static void test_ui(bool screenshots) {
         }
     }
     key(&a,'a'); draw(&a,a.demo_start+1); assert(a.modal==ADD);
+    int browse_buttons=0;
+    for (int i=0;i<a.nhits;i++) if (a.hits[i].key==HIT_BROWSE || a.hits[i].key==HIT_CHOOSE_DIR) {
+        wchar_t caption[16]; assert(mvinnwstr(a.hits[i].y,a.hits[i].x,caption,11)!=ERR && !wcscmp(caption,L"[F2 Browse]")); browse_buttons++;
+    }
+    assert(browse_buttons==2);
     if (screenshots) snapshot("artifacts/potok-add.svg");
     for (int i=0;i<a.nhits;i++) if (a.hits[i].key==27) { e=(MEVENT){.x=a.hits[i].x,.y=a.hits[i].y,.bstate=BUTTON1_PRESSED}; mouse(&a,e); break; }
     assert(!a.modal);
@@ -175,10 +196,14 @@ static void test_ui(bool screenshots) {
     resizeterm(24,80); open_modal(&a,SEARCH); set_input(&a,L"Русский тест"); draw(&a,a.demo_start+2);
     assert(mvinnwstr(7,6,title,5)!=ERR && !wcsncmp(title,L"ПОИСК",5));
     if (screenshots) snapshot("artifacts/potok-search.svg");
+    key(&a,27); draw(&a,a.demo_start+2);
+    assert(mvinnwstr(4,3,title,12)!=ERR && !wcsncmp(title,L"Все торренты",12));
     open_modal(&a,ADD); draw(&a,a.demo_start+2);
     if (screenshots) snapshot("artifacts/potok-add-small.svg");
     key(&a,27);
     key(&a,27); open_modal(&a,HELP); draw(&a,a.demo_start+2);
+    wchar_t help[70]; assert(mvinnwstr(6,6,help,64)!=ERR && wcsstr(help,L"раздел слева"));
+    assert(mvinnwstr(8,6,help,64)!=ERR && wcsstr(help,L"активного поля"));
     if (screenshots) snapshot("artifacts/potok-ru-help.svg");
     key(&a,27);
     resizeterm(16,60); a.russian=false; draw(&a,a.demo_start+2);
@@ -242,11 +267,12 @@ static void test_terminal(bool real,bool cli) {
             assert(write(master,"\033[200~",6)==6);
             for (size_t i=0;i<strlen(source);i++) { assert(write(master,source+i,1)==1); struct timespec wait={0,3000000}; nanosleep(&wait,NULL); }
             assert(write(master,"\033[201~",6)==6); terminal_read(master,buffer,sizeof(buffer),200);
-            if (!access("/usr/bin/fzf",X_OK)) {
-                assert(write(master,"\006",1)==1); terminal_read(master,buffer,sizeof(buffer),1000);
-                assert(strstr(buffer,".torrent"));
-                assert(write(master,"\r",1)==1); terminal_read(master,buffer,sizeof(buffer),400);
+            assert(write(master,"\033OQ",3)==3); *buffer=0;
+            for (int attempt=0;attempt<6 && !strstr(buffer,".torrent");attempt++) {
+                size_t used=strlen(buffer); terminal_read(master,buffer+used,sizeof(buffer)-used,500);
             }
+            assert(strstr(buffer,".torrent"));
+            assert(write(master,"\r",1)==1); terminal_read(master,buffer,sizeof(buffer),400);
             assert(write(master,"\024",1)==1); terminal_read(master,buffer,sizeof(buffer),250);
             assert(strstr(buffer,"FILES") && strstr(buffer,".torrent"));
             assert(write(master,"\n",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
@@ -255,6 +281,11 @@ static void test_terminal(bool real,bool cli) {
             assert(strstr(buffer,"SAVE TO"));
             assert(write(master,"\033OQ",3)==3); terminal_read(master,buffer,sizeof(buffer),150);
             assert(strstr(buffer,"ADD TORRENT"));
+            assert(write(master,"\t",1)==1); terminal_read(master,buffer,sizeof(buffer),100);
+            const char browse_click[]="\033[<0;97;20M\033[<0;97;20m";
+            assert(write(master,browse_click,sizeof(browse_click)-1)==sizeof(browse_click)-1); terminal_read(master,buffer,sizeof(buffer),150);
+            assert(strstr(buffer,"SAVE TO"));
+            assert(write(master,"\033",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
             assert(write(master,"\n",1)==1); terminal_read(master,buffer,sizeof(buffer),700);
         }
         assert(strstr(buffer,"payload.bin"));
@@ -358,7 +389,7 @@ static void test_settings_and_files(void) {
     assert(a.modal==DIRECTORIES && strstr(a.files.root,"/nested") && !a.file_count);
     key(&a,KEY_F(2)); assert(a.modal==ADD && a.field==1 && wcsstr(a.destination.value,L"/nested"));
     assert(line_get(&a.input,path,sizeof(path)) && !strcmp(path,chosen));
-    start_directory_picker(&a); key(&a,KEY_LEFT); assert(!strcmp(a.files.root,settings.browse));
+    key(&a,KEY_F(2)); assert(a.modal==DIRECTORIES); key(&a,KEY_LEFT); assert(!strcmp(a.files.root,settings.browse));
     key(&a,27); assert(a.modal==ADD && wcsstr(a.destination.value,L"/nested"));
     Line destination; double available; assert(line_set(&destination,root) && destination_space(&destination,&available) && available>=0);
     snprintf(path,sizeof(path),"%s/not-created/child",root); assert(line_set(&destination,path) && destination_space(&destination,&available));

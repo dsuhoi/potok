@@ -89,6 +89,7 @@ static bool contains(const char *s,const char *query) {
     return !len;
 }
 static bool completed(const Torrent *t) { return t->metadata>=1 && t->done>=1; }
+static bool progress_active(const Torrent *t) { return t->status==2 || (t->status==4 && !completed(t)); }
 static bool filter_matches(const Torrent *t,int filter) {
     return !filter || (filter==1 && !completed(t) && (t->status==3||t->status==4)) ||
         (filter==2 && completed(t)) || (filter==3 && !t->status) || (filter==4 && *t->error);
@@ -307,7 +308,7 @@ static Caret draw_line(App *a,Line *line,int y,int x,int width,bool active,int w
     return (Caret){y,x+1+MIN(cells,width-3)};
 }
 static void draw_modal(App *a) {
-    int w=MIN(a->width-6,90), h=a->modal==HELP?23:a->modal==ADD?18:(a->modal==FILES||a->modal==DIRECTORIES)?MIN(a->height-4,24):12;
+    int w=MIN(a->width-6,90), h=a->modal==HELP?24:a->modal==ADD?18:(a->modal==FILES||a->modal==DIRECTORIES)?MIN(a->height-4,24):12;
     if (a->modal!=ADD && a->modal!=FILES && a->modal!=DIRECTORIES) w=MIN(w,76);
     int x=(a->width-w)/2,y=MAX(0,(a->height-h)/2); h=MIN(h,a->height);
     Caret caret={0}; bool editing=false;
@@ -317,22 +318,23 @@ static void draw_modal(App *a) {
     text(y,x,1,DIM,"╭"); text(y,x+w-1,1,DIM,"╮"); text(y+h-1,x,1,DIM,"╰"); text(y+h-1,x+w-1,1,DIM,"╯");
     label(a,y+1,x+3,w-6,ACCENT,modal_title(a->modal)); a->nhits=0;
     if (a->modal==HELP) {
-        const char *lines[]={"↑ ↓ / j k       Select row","Tab              Switch field / pane","← →              Details tabs","1 … 5            Filters","a / f            Add / choose .torrent","Ctrl-F / Ctrl-T  Search / tree in Add","Enter            Open download folder","Space / p        Pause / resume","/ / l            Search / EN-RU","v                Verify data","K / J            Move in queue","t / s            Slow mode / speed limits","d / D            Remove torrent","q / Ctrl-C       Close TUI; keep downloading","Q                Stop downloads and quit","Mouse / wheel    Select / scroll","Esc              Cancel","Ctrl-U / Ctrl-W  Clear field / delete word"};
+        const char *lines[]={"↑ ↓ / j k       Select row","Tab              Switch field / pane","← →              Details tabs","1 … 5            Switch sidebar section","a / f            Add / choose .torrent","F2 / Ctrl-F      Browse active field","Ctrl-T           Tree / folder picker","Enter            Open download folder","Space / p        Pause / resume","/ / l            Search / EN-RU","v                Verify data","K / J            Move in queue","t / s            Slow mode / speed limits","d / D            Remove torrent","q / Ctrl-C       Close TUI; keep downloading","Q                Stop downloads and quit","Mouse / wheel    Select / scroll","Esc              Cancel","Ctrl-U / Ctrl-W  Clear field / delete word"};
         for (size_t i=0;i<COUNT(lines) && y+3+(int)i<y+h-2;i++) label(a,y+3+(int)i,x+3,w-6,BASE,lines[i]);
         button(a,y+h-2,x+3,"[ Close ]",27,ACCENT); return;
     }
     if (a->modal==ADD) {
-        label(a,y+3,x+3,w-6,DIM,"Magnet / URL / .torrent");
+        const char *browse=tr(a,"[F2 Browse]"); int bx=x+w-3-cell_width(browse);
+        label(a,y+3,x+3,bx-x-4,a->field==0?ACCENT:DIM,"Magnet / URL / .torrent");
+        button(a,y+3,bx,browse,HIT_BROWSE,a->field==0?ACCENT:DIM);
         Caret source=draw_line(a,&a->input,y+4,x+3,w-6,a->field==0,HIT_SOURCE);
-        button(a,y+6,x+3,"[Ctrl-F Search]",HIT_BROWSE,ACCENT);
-        button(a,y+6,x+3+cell_width(tr(a,"[Ctrl-F Search]"))+2,"[Ctrl-T Tree]",HIT_TREE,ACCENT);
-        label(a,y+8,x+3,w-6,DIM,"Save to");
+        button(a,y+6,x+3,"[Ctrl-T Tree]",HIT_TREE,DIM);
+        label(a,y+8,x+3,bx-x-4,a->field==1?ACCENT:DIM,"Save to");
+        button(a,y+8,bx,browse,HIT_CHOOSE_DIR,a->field==1?ACCENT:DIM);
         Caret destination=draw_line(a,&a->destination,y+9,x+3,w-6,a->field==1,HIT_DIRECTORY);
         double available; char b[32];
         if (destination_space(&a->destination,&available)) drawf(a,y+10,x+3,w-6,DIM,"Free: %s",bytes(a,available,b));
         else label(a,y+10,x+3,w-6,DIM,"Free: unavailable");
-        button(a,y+12,x+3,"[Choose folder]",HIT_CHOOSE_DIR,ACCENT);
-        label(a,y+12,x+w-26,22,DIM,"Tab: switch field");
+        label(a,y+12,x+3,w-6,DIM,"Tab: switch field · F2: browse");
         caret=a->field?destination:source; editing=true;
     } else if (a->modal==FILES || a->modal==DIRECTORIES) {
         text(y+2,x+3,w-6,DIM,a->files.root);
@@ -356,6 +358,7 @@ static void draw_modal(App *a) {
         }
         if (!a->file_count) label(a,y+5,x+4,w-8,DIM,a->modal==DIRECTORIES?"No folders":"No .torrent files");
         if (a->file_tree && a->modal==FILES) label(a,y+h-3,x+3,w-6,DIM,"← →: fold / unfold · Enter: select");
+        if (a->modal==DIRECTORIES) label(a,y+h-3,x+3,w-6,DIM,"Enter: open folder · ←: parent");
         if (a->files.limited) label(a,y+h-3,x+3,w-6,WARM,"Search limit reached");
     } else if (a->modal==REMOVE) {
         text(y+3,x+3,w-6,WARM,a->target_name);
@@ -366,7 +369,7 @@ static void draw_modal(App *a) {
         label(a,y+3,x+3,w-6,BASE,description);
         if (a->modal!=STOP_DAEMON) { caret=draw_line(a,&a->input,y+6,x+3,w-6,true,HIT_SOURCE); editing=true; }
     }
-    button(a,y+h-2,x+3,a->modal==ADD?"[ Enter: add ]":a->modal==DIRECTORIES?"[F2 Use folder]":a->modal==FILES?"[ Enter: select ]":a->modal==REMOVE?"[ Enter: remove ]":"[ Enter: confirm ]",a->modal==DIRECTORIES?HIT_USE_DIR:'\n',a->modal==REMOVE && a->remove_data?BAD:ACCENT);
+    button(a,y+h-2,x+3,a->modal==ADD?"[ Enter: add ]":a->modal==DIRECTORIES?"[F2 Select this folder]":a->modal==FILES?"[ Enter: select ]":a->modal==REMOVE?"[ Enter: remove ]":"[ Enter: confirm ]",a->modal==DIRECTORIES?HIT_USE_DIR:'\n',a->modal==REMOVE && a->remove_data?BAD:ACCENT);
     button(a,y+h-2,x+w-18,"[ Esc: cancel ]",27,DIM);
     if (editing) { curs_set(1); move(caret.y,caret.x); }
 }
@@ -396,7 +399,7 @@ static void draw(App *a,double time) {
         }
         for (int y=4;y<LINES-3;y++) label(a,y,a->side,1,DIM,"│");
     } else {
-        for (int i=0;i<5;i++) { drawf(a,4,3+i*15,14,a->filter==i?ACCENT:DIM,"%d %s",i+1,filters[i]); hit(a,4,3+i*15,14,1,'1'+i); }
+        for (int i=0;i<5;i++) { text(4,3+i*15,14,a->filter==i?ACCENT:DIM,filters[i]); hit(a,4,3+i*15,14,1,'1'+i); }
     }
     char b[32]; int third=w/3;
     label(a,5,x,third,DIM,"↓  DOWNLOAD"); label(a,5,x+third,third,DIM,"↑  UPLOAD"); label(a,5,x+third*2,third,DIM,"◎  SWARM");
@@ -415,9 +418,9 @@ static void draw(App *a,double time) {
         bool chosen=k==a->selected; int c=chosen?SELECT:BASE;
         if (chosen) { fill(y,x-1,w+1,SELECT); fill(y+1,x-1,w+1,SELECT); label(a,y,x-1,1,SELECT_ACCENT,"▎"); }
         drawf(a,y,x+1,w-38,c,"%s",t->name);
-        double value=t->status==2?t->checked:t->metadata<1&&t->status>0?-1:t->shown;
-        progress(y,x+w-35,9,value,t->status==4||t->status==6||t->status==2,chosen,time);
-        if (value<0) text(y,x+w-25,5,c,"  …"); else drawf(a,y,x+w-25,5,c,"%3.0f%%",value*100);
+        double value=t->status==2?t->checked:t->metadata<1&&t->status>0?-1:completed(t)?1:t->shown;
+        progress(y,x+w-35,9,value,progress_active(t),chosen,time);
+        if (value<0) text(y,x+w-25,5,c,"  …"); else drawf(a,y,x+w-25,5,c,"%3.0f%%",floor(value*100));
         drawf(a,y,x+w-19,9,c,"%s/s",bytes(a,t->down,b)); drawf(a,y,x+w-9,9,c,"%s/s",bytes(a,t->up,b));
         char e[32];
         if (completed(t)) drawf(a,y+1,x+1,w-2,chosen?SELECT:*t->error?BAD:DIM,"%s  ·  %s  ·  %d peers  ·  %s",status_name(a,t),bytes(a,t->size,b),t->peers,tr(a,"Ready"));
@@ -667,8 +670,7 @@ static void key(App *a,int k) {
         if (a->modal==HELP) { if (k=='?' || k=='q' || k=='\n') a->modal=NORMAL; return; }
         if (k=='\n' || k==KEY_ENTER) { submit(a); return; }
         if (a->modal==REMOVE) { if (k==' ' || k==HIT_REMOVE_DATA) a->remove_data=!a->remove_data; return; }
-        if (a->modal==ADD && k==6) { if (a->field) start_directory_picker(a); else choose_file(a,false); return; }
-        if (a->modal==ADD && k==20) { choose_file(a,true); return; }
+        if (a->modal==ADD && (k==KEY_F(2) || k==6 || k==20)) { if (a->field) start_directory_picker(a); else choose_file(a,k==20); return; }
         if (a->modal==DIRECTORIES && (k==KEY_F(2) || k==HIT_USE_DIR)) {
             if (!line_set(&a->destination,a->files.root)) { notice(a,"Invalid input encoding"); return; }
             a->modal=ADD; a->field=1; return;
@@ -745,9 +747,8 @@ static void mouse(App *a,MEVENT e) {
     if (click) for (int i=a->nhits-1;i>=0;i--) {
         Hit *h=&a->hits[i];
         if (e.x>=h->x && e.x<h->x+h->w && e.y>=h->y && e.y<h->y+h->h) {
-            if (h->key==HIT_BROWSE) choose_file(a,false);
-            else if (h->key==HIT_TREE) choose_file(a,true);
-            else if (h->key==HIT_CHOOSE_DIR) start_directory_picker(a);
+            if (h->key==HIT_BROWSE || h->key==HIT_CHOOSE_DIR) { a->field=h->key==HIT_CHOOSE_DIR; key(a,KEY_F(2)); }
+            else if (h->key==HIT_TREE) { a->field=0; key(a,20); }
             else if (h->key==HIT_SOURCE || h->key==HIT_DIRECTORY || h->key==HIT_QUERY) {
                 if (a->modal==ADD) a->field=h->key==HIT_DIRECTORY;
                 Line *line=active_line(a); line->cursor=line->scroll;
@@ -876,7 +877,7 @@ int main(int argc,char **argv) {
         }
         if (!strcmp(argv[i],"--")) { positional=true; continue; }
         if (!strcmp(argv[i],"--help") || !strcmp(argv[i],"-h")) { help=true; continue; }
-        if (!strcmp(argv[i],"--version")) { puts("potok 0.4.0"); return 0; }
+        if (!strcmp(argv[i],"--version")) { puts("potok 0.4.1"); return 0; }
         if (!strcmp(argv[i],"--demo")) a.demo=true;
         else if (!strcmp(argv[i],"--daemon")) daemon=true;
         else if (!strcmp(argv[i],"--background")) background=true;

@@ -55,6 +55,8 @@ potok --background file.torrent
 
 Press `a` to paste a link or choose a file. The form shows the destination and
 available disk space. `Tab` switches fields; `Enter` adds the torrent.
+Both fields have a **Browse** button. `F2` or `Ctrl-F` opens a picker for the
+active field: a torrent file for the source, a directory for **Save to**.
 
 ![Searching torrent files by directory and filename](docs/assets/search.gif)
 
@@ -65,8 +67,8 @@ Set `browse_dir` to change the root, or type a directory in the source field
 before searching. The tree appears after scanning; symlink directories are skipped.
 Traversal is limited to 32 levels and 100,000 torrent files.
 
-Click **Choose folder**, or press `Ctrl-F` in the destination field, to browse
-folders. `Enter` enters a folder, `←` goes up and `F2` selects the current one.
+In **Save to**, click **Browse** or press `F2` to browse folders. `Enter` enters a
+folder, `←` goes up and `F2` selects the current one.
 
 ## <img src="docs/assets/transfers.svg" width="22" height="22" alt=""> Controls
 
@@ -74,10 +76,11 @@ folders. `Enter` enters a folder, `←` goes up and `F2` selects the current one
 |---|---|
 | `↑ ↓` / `j k` | Select a torrent |
 | `a` / `f` | Add a source / search torrent files |
+| `F2` in Add | Browse for the active field: torrent file or download folder |
 | `p` / `Space` | Pause or resume |
 | `Enter` | Open the download folder |
 | `Tab` / `← →` | Switch panes / detail tabs |
-| `1` … `5` / `/` | Filter by state / name |
+| `1` … `5` / `/` | Switch sidebar section / filter by name |
 | `s` / `t` | Set speed limits / toggle slow mode |
 | `v` / `K J` | Verify data / move in queue |
 | `d` | Remove a torrent; optionally delete its files |
@@ -88,6 +91,7 @@ folders. `Enter` enters a folder, `←` goes up and `F2` selects the current one
 The mouse selects rows, tabs, buttons and file checkboxes; the wheel scrolls.
 **Completed** includes finished torrents on pause. **Seeding** means a torrent
 offers its completed data to other peers.
+Completed progress bars stay still while uploads continue.
 
 In the removal dialog, leave **Delete downloaded files** unchecked to keep the
 data. Checking it also deletes complete or partial downloads, without a recycle

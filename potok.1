@@ -1,4 +1,4 @@
-.TH POTOK 1 "2026-10-25" "Potok 0.4.0"
+.TH POTOK 1 "2026-10-25" "Potok 0.4.1"
 .SH NAME
 potok \- terminal BitTorrent client
 .SH SYNOPSIS
@@ -47,10 +47,11 @@ Print usage.
 opens the add form;
 .B f
 opens file search;
-.B Ctrl-F
+.B F2 / Ctrl-F
 opens file search from the source field, or folder selection from the destination.
+Both fields have a Browse button; clicking it also selects the corresponding field.
 .B Ctrl-T
-opens the built-in torrent tree. Type to filter files and their parent branches;
+opens the built-in torrent tree from the source field. Type to filter files and their parent branches;
 Left/Right fold and unfold directories. Enter selects a file.
 In folder selection, Enter enters a directory, Left goes to its parent,
 and F2 selects the current directory.
@@ -63,6 +64,8 @@ pauses or resumes;
 switches EN/RU;
 .B ?
 opens help.
+.B 1 ... 5
+switches the left sidebar section. The mouse can select a section directly.
 .B d
 or
 .B D
@@ -90,6 +93,7 @@ fzf is optional; a built-in file picker is available without it.
 xdg-open (xdg-utils) is optional and used only to open download directories.
 The Completed filter includes finished paused downloads. The add form shows
 available disk space for the destination or its nearest existing parent.
+Completed progress bars are static during seeding.
 The terminal supplies the background color and transparency.
 No boot-time service is installed.
 .SH AUTHORS
