@@ -1,0 +1,77 @@
+.TH POTOK 1 "2026-10-24" "Potok 0.3.1"
+.SH NAME
+potok \- terminal BitTorrent client
+.SH SYNOPSIS
+.B potok
+.RI [ options ]
+.SH DESCRIPTION
+Potok provides a terminal interface to its own background BitTorrent worker.
+Closing the interface leaves downloads and uploads running.
+An external Transmission service is not required.
+.SH OPTIONS
+.TP
+.B --background
+Start the worker without opening the interface.
+.TP
+.B --status
+Print the worker PID and torrent count. Exit with status 1 if it is not running.
+.TP
+.B --stop
+Save torrent state and stop the worker.
+.TP
+.BI --lang " en|ru"
+Select the interface language for this invocation.
+.TP
+.BI --download-dir " DIR"
+Override the destination for new downloads.
+.TP
+.BI --state-dir " DIR"
+Select the worker profile. The directory must be private to the current user.
+.TP
+.BI --config-dir " DIR"
+Select the configuration directory.
+.TP
+.B --demo
+Show an animated preview without network or configuration changes.
+.TP
+.B --version
+Print the version.
+.TP
+.B --help
+Print usage.
+.SH KEYS
+.B a
+opens the add form;
+.B f
+opens file search;
+.B Ctrl-F
+opens file search from the add form.
+Use Tab to switch fields, Enter to submit, and Esc to cancel.
+.B p
+pauses or resumes;
+.B l
+switches EN/RU;
+.B ?
+opens help.
+.B q
+closes the interface while downloads continue.
+.B Q
+stops downloads after confirmation.
+.SH FILES
+.I $XDG_CONFIG_HOME/potok/config
+or
+.I ~/.config/potok/config
+stores language, download_dir, state_dir, and browse_dir.
+.PP
+.I $XDG_DATA_HOME/potok
+or
+.I ~/.local/share/potok
+stores resume data, speed limits, the control socket, and worker.log.
+.SH NOTES
+fzf is optional; a built-in file picker is available without it.
+The terminal supplies the background color and transparency.
+No boot-time service is installed.
+.SH AUTHORS
+Dan Sukhorukov.
+.SH LICENSE
+MIT. libtorrent-rasterbar is distributed separately under BSD-3-Clause.

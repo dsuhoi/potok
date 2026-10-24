@@ -1,0 +1,17 @@
+potok
+tests/test
+tests/test-sanitize
+artifacts/
+.deps/
+*.o
+dist/
+tests/engine_test
+tests/engine-sanitize
+tests/swarm_probe
+*.plist
+*.pkg.tar.*
+*.src.tar.*
+stage/
+packaging/aur/*/src/
+packaging/aur/*/pkg/
+packaging/aur/*/*.log
