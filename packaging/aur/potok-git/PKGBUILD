@@ -1,6 +1,6 @@
 # Maintainer: Dan Sukhorukov <dsuh0i.h8@gmail.com>
 pkgname=potok-git
-pkgver=0.3.1
+pkgver=0.3.2
 pkgrel=1
 pkgdesc='Terminal BitTorrent client with a persistent background worker, mouse support and EN/RU'
 arch=('x86_64')

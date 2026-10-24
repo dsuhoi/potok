@@ -429,14 +429,10 @@ static void filter_files(App *a) {
 static void selected_file(App *a,const char *path) {
     if (!line_set(&a->input,path)) { notice(a,"Invalid input encoding"); return; }
     a->field=0; a->modal=ADD;
-    if (*a->settings.directory && strlen(path)<PATH_MAX) {
-        strcpy(a->settings.browse,path); char *slash=strrchr(a->settings.browse,'/');
-        if (slash) { if (slash==a->settings.browse) slash[1]=0; else *slash=0; save_settings(a); }
-    }
 }
 static void choose_file(App *a) {
     char root[PATH_MAX],query[16384],source[16384],selected_path[PATH_MAX],error[1024];
-    const char *initial=*a->settings.browse?a->settings.browse:*a->downloads?a->downloads:getenv("HOME");
+    const char *initial=*a->settings.browse?a->settings.browse:getenv("HOME");
     if (!initial) initial="/tmp";
     snprintf(root,sizeof(root),"%s",initial); *query=0;
     if (line_get(&a->input,source,sizeof(source)) && *source && strncmp(source,"magnet:?",8) && strncmp(source,"http://",7) && strncmp(source,"https://",8)) {
@@ -687,7 +683,7 @@ static void palette(void) {
 }
 static void usage(const App *a) {
     puts(tr(a,"Potok"));
-    puts(tr(a,"Usage: potok [--lang en|ru] [--download-dir DIR] [--state-dir DIR] [--config-dir DIR]"));
+    puts(tr(a,"Usage: potok [--lang en|ru] [--download-dir DIR] [--state-dir DIR] [--config-dir DIR] [SOURCE]"));
     puts(tr(a,"Commands: --background, --status, --stop, --demo"));
     puts(tr(a,"Keys: a add, f files, q close TUI, Q stop, ? help"));
 }
@@ -699,15 +695,20 @@ static bool absolute_path(const char *value,char out[PATH_MAX]) {
     return n>=0 && n<PATH_MAX;
 }
 int main(int argc,char **argv) {
-    App a={0}; const char *state=NULL,*downloads=NULL,*config=NULL;
+    App a={0}; const char *state=NULL,*downloads=NULL,*config=NULL,*source=NULL;
     const char *language=getenv("LC_ALL");
     if (!language || !*language) language=getenv("LC_MESSAGES");
     if (!language || !*language) language=getenv("LANG");
     a.russian=language && !strncmp(language,"ru",2);
-    bool help=false,daemon=false,background=false,status=false,stop=false,lang_override=false;
+    bool help=false,daemon=false,background=false,status=false,stop=false,lang_override=false,positional=false;
     for (int i=1;i<argc;i++) {
+        if (positional || argv[i][0]!='-') {
+            if (source) { fputs("potok: specify one torrent source\n",stderr); return 2; }
+            source=argv[i]; continue;
+        }
+        if (!strcmp(argv[i],"--")) { positional=true; continue; }
         if (!strcmp(argv[i],"--help") || !strcmp(argv[i],"-h")) { help=true; continue; }
-        if (!strcmp(argv[i],"--version")) { puts("potok 0.3.1"); return 0; }
+        if (!strcmp(argv[i],"--version")) { puts("potok 0.3.2"); return 0; }
         if (!strcmp(argv[i],"--demo")) a.demo=true;
         else if (!strcmp(argv[i],"--daemon")) daemon=true;
         else if (!strcmp(argv[i],"--background")) background=true;
@@ -722,8 +723,10 @@ int main(int argc,char **argv) {
         } else { fprintf(stderr,"potok: unknown or incomplete option: %s\n",argv[i]); return 2; }
     }
     if (help) { usage(&a); return 0; }
-    if (daemon) { if (!state || !downloads || a.demo || background || stop || status) return 2; return service_run(state,downloads,false); }
-    if ((background+status+stop)>1 || (a.demo && (background || status || stop))) return 2;
+    if (daemon) { if (!state || !downloads || a.demo || background || stop || status || source) return 2; return service_run(state,downloads,false); }
+    if ((background+status+stop)>1 || (a.demo && (background || status || stop)) || (source && (a.demo || status || stop))) {
+        fputs("potok: incompatible command options\n",stderr); return 2;
+    }
     if (!(background || status || stop) && (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))) { fputs("potok: run inside a terminal\n",stderr); return 2; }
     setlocale(LC_ALL,""); setlocale(LC_NUMERIC,"C");
     if (!a.demo) {
@@ -734,6 +737,7 @@ int main(int argc,char **argv) {
         if (!absolute_path(state?state:a.settings.state,state_path) || !absolute_path(downloads?downloads:a.settings.downloads,a.downloads)) { fputs("potok: path is too long\n",stderr); return 2; }
         a.engine=client_open(state_path,a.downloads,!(stop || status),error,sizeof(error));
         if (!a.engine) { if (stop || status) { puts(tr(&a,"Not running")); return status?1:0; } fprintf(stderr,"potok: %s\n",error); return 1; }
+        if (source && !client_add(a.engine,source,a.downloads,false,error,sizeof(error))) { fprintf(stderr,"potok: %s\n",error); client_close(a.engine); return 1; }
         if (stop) { bool ok=client_stop(a.engine,error,sizeof(error)); client_close(a.engine); if (!ok) { fprintf(stderr,"potok: %s\n",error); return 1; } puts(tr(&a,"Stopped")); return 0; }
         if (background || status) {
             Torrent *items=NULL; int count=0; bool ok=client_snapshot(a.engine,&items,&count,error,sizeof(error));

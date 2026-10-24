@@ -1,13 +1,16 @@
-.TH POTOK 1 "2026-10-24" "Potok 0.3.1"
+.TH POTOK 1 "2026-10-24" "Potok 0.3.2"
 .SH NAME
 potok \- terminal BitTorrent client
 .SH SYNOPSIS
 .B potok
-.RI [ options ]
+.RI [ options ] " [SOURCE]"
 .SH DESCRIPTION
 Potok provides a terminal interface to its own background BitTorrent worker.
 Closing the interface leaves downloads and uploads running.
 An external Transmission service is not required.
+An optional SOURCE is a local torrent path, magnet link or HTTP(S) torrent URL.
+It is added before opening the interface. Quote paths containing spaces;
+use -- before a filename beginning with a dash.
 .SH OPTIONS
 .TP
 .B --background
@@ -62,6 +65,8 @@ stops downloads after confirmation.
 or
 .I ~/.config/potok/config
 stores language, download_dir, state_dir, and browse_dir.
+The default browse_dir is the home directory and does not change when a file
+is selected. A directory typed in the source field scopes one file search.
 .PP
 .I $XDG_DATA_HOME/potok
 or

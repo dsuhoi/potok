@@ -65,7 +65,7 @@ bool settings_load(Settings *s,const char *directory,bool russian,char *error,si
     if (!private_directory(s->directory,error,cap)) return false;
     n=snprintf(s->downloads,sizeof(s->downloads),"%s/Downloads",home);
     if (n<0 || n>=PATH_MAX) goto invalid;
-    strcpy(s->browse,s->downloads);
+    strcpy(s->browse,home);
     n=data && *data=='/' ? snprintf(s->state,sizeof(s->state),"%s/potok",data) : snprintf(s->state,sizeof(s->state),"%s/.local/share/potok",home);
     if (n<0 || n>=PATH_MAX) goto invalid;
     char path[PATH_MAX+8]; snprintf(path,sizeof(path),"%s/config",s->directory);

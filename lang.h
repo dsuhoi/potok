@@ -111,7 +111,7 @@ static const struct { const char *en, *ru; } translations[] = {
     {"Not running", "Не запущен"},
     {"Stopped", "Остановлен"},
     {"Running · PID %d · %d torrents\n", "Работает · PID %d · торрентов: %d\n"},
-    {"Usage: potok [--lang en|ru] [--download-dir DIR] [--state-dir DIR] [--config-dir DIR]", "Запуск: potok [--lang en|ru] [--download-dir DIR] [--state-dir DIR] [--config-dir DIR]"},
+    {"Usage: potok [--lang en|ru] [--download-dir DIR] [--state-dir DIR] [--config-dir DIR] [SOURCE]", "Запуск: potok [--lang en|ru] [--download-dir DIR] [--state-dir DIR] [--config-dir DIR] [ИСТОЧНИК]"},
     {"Commands: --background, --status, --stop, --demo", "Команды: --background, --status, --stop, --demo"},
     {"Keys: a add, f files, q close TUI, Q stop, ? help", "Клавиши: a добавить, f файлы, q закрыть TUI, Q остановить, ? справка"},
 };

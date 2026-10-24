@@ -15,16 +15,18 @@
 #include <time.h>
 #include <sys/prctl.h>
 
-typedef struct { size_t seen,found; bool limited; bool (*emit)(const char *,void *); void *context; } Walk;
+typedef struct { size_t found; bool limited; bool (*emit)(const char *,void *); void *context; } Walk;
 static bool torrent_name(const char *s) { size_t n=strlen(s); return n>8 && !strcasecmp(s+n-8,".torrent"); }
 static bool walk(Walk *w,const char *path,int depth) {
-    /* shortcut: cap traversal at 32 levels / 1M entries / 100k torrents; raise for larger archives. */
-    if (depth>32 || w->seen>=1000000 || w->found>=100000) { w->limited=true; return true; }
+    /* shortcut: cap traversal at 32 levels / 100k torrents; raise for larger archives. */
+    if (depth>32 || w->found>=100000) { w->limited=true; return true; }
     DIR *dir=opendir(path); if (!dir) return true;
     struct dirent *entry; bool ok=true;
     while ((entry=readdir(dir))) {
         if (!strcmp(entry->d_name,".") || !strcmp(entry->d_name,"..")) continue;
-        if (++w->seen>1000000 || w->found>=100000) { w->limited=true; break; }
+        if (w->found>=100000) { w->limited=true; break; }
+        if (entry->d_type!=DT_UNKNOWN && entry->d_type!=DT_DIR &&
+            (entry->d_type!=DT_REG || !torrent_name(entry->d_name))) continue;
         char child[PATH_MAX]; int n=snprintf(child,sizeof(child),"%s%s%s",path,path[strlen(path)-1]=='/'?"":"/",entry->d_name);
         if (n<0 || n>=(int)sizeof(child)) { w->limited=true; continue; }
         struct stat st; if (lstat(child,&st)) continue;
@@ -71,7 +73,7 @@ static bool executable(const char *name,char result[PATH_MAX]) {
 }
 static bool emit_file(const char *path,void *context) {
     size_t skip=*(size_t *)context;
-    return fwrite(path+skip,1,strlen(path+skip)+1,stdout)==strlen(path+skip)+1;
+    return fwrite(path+skip,1,strlen(path+skip)+1,stdout)==strlen(path+skip)+1 && !fflush(stdout);
 }
 int picker_fzf(const char *root,const char *query,char selected[PATH_MAX],const volatile sig_atomic_t *cancel,char *error,size_t cap) {
     char binary[PATH_MAX],resolved[PATH_MAX]; if (!executable("fzf",binary)) return 2;
@@ -94,7 +96,7 @@ int picker_fzf(const char *root,const char *query,char selected[PATH_MAX],const 
         signal(SIGINT,SIG_DFL); signal(SIGTERM,SIG_DFL);
         if (dup2(input[0],0)<0 || dup2(fileno(output),1)<0) _exit(1);
         closefrom(3);
-        execl(binary,binary,"--read0","--print0","--no-multi","--no-print-query","--no-expect","--layout=reverse","--border=rounded","--color=bg:-1,bg+:-1,gutter:-1,hl:85,hl+:85,pointer:85","--prompt=.torrent > ","--query",query,(char *)NULL);
+        execl(binary,binary,"--read0","--print0","--no-multi","--no-print-query","--no-expect","--layout=reverse","--border=rounded","--color=bg:-1,bg+:-1,gutter:-1,hl:85,hl+:85,pointer:85","--header",resolved,"--prompt=.torrent > ","--query",query,(char *)NULL);
         _exit(127);
     }
     close(input[0]); close(input[1]);

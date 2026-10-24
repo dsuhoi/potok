@@ -159,12 +159,13 @@ static void terminal_read(int fd,char *buffer,size_t cap,int milliseconds) {
     }
     buffer[n]=0;
 }
-static void test_terminal(bool real) {
+static void test_terminal(bool real,bool cli) {
     const char *binary=getenv("POTOK_TEST_BINARY"); if (!binary || !*binary) binary="./potok";
+    char executable[PATH_MAX]; assert(realpath(binary,executable)); binary=executable;
     char state[]="/tmp/potok-ui-XXXXXX",downloads[128],config[128],source[128];
     if (real) {
         assert(mkdtemp(state)); snprintf(downloads,sizeof(downloads),"%s/downloads",state); snprintf(config,sizeof(config),"%s/config",state);
-        snprintf(source,sizeof(source),"%s/файл.torrent",state); FILE *f=fopen(source,"wb"); assert(f);
+        snprintf(source,sizeof(source),"%s/-русский файл.torrent",state); FILE *f=fopen(source,"wb"); assert(f);
         fputs("d4:infod6:lengthi4e4:name11:payload.bin12:piece lengthi16384e6:pieces20:",f);
         const unsigned char hash[]={0xa9,0x4a,0x8f,0xe5,0xcc,0xb1,0x9b,0xa6,0x1c,0x4c,0x08,0x73,0xd3,0x91,0xe9,0x87,0x98,0x2f,0xbb,0xd3};
         assert(fwrite(hash,1,sizeof(hash),f)==sizeof(hash)); fputs("7:privatei1eee",f); fclose(f);
@@ -178,7 +179,8 @@ static void test_terminal(bool real) {
         for (int fd=0;fd<3;fd++) assert(dup2(slave,fd)>=0);
         close(slave); close(master); setenv("TERM","xterm-256color",1);
         unsetenv("FZF_DEFAULT_OPTS"); unsetenv("FZF_DEFAULT_OPTS_FILE");
-        if (real) execl(binary,binary,"--state-dir",state,"--download-dir",downloads,"--config-dir",config,"--lang","en",(char *)NULL);
+        if (cli) { assert(!chdir(state)); execl(binary,binary,"--state-dir",state,"--download-dir",downloads,"--config-dir",config,"--lang","en","--","-русский файл.torrent",(char *)NULL); }
+        else if (real) execl(binary,binary,"--state-dir",state,"--download-dir",downloads,"--config-dir",config,"--lang","en",(char *)NULL);
         else execl(binary,binary,"--demo","--lang","en",(char *)NULL);
         _exit(127);
     }
@@ -187,17 +189,20 @@ static void test_terminal(bool real) {
     if (real) {
         char startup_error[1024]={0}; Client *owner=client_open(state,downloads,false,startup_error,sizeof(startup_error));
         if (owner) { worker_pidfd=(sig_atomic_t)syscall(SYS_pidfd_open,owner->pid,0); client_close(owner); }
-        assert(strstr(buffer,"No torrents") && !strstr(buffer,"Transmission") && !strstr(buffer,"RECONNECT"));
-        assert(write(master,"a",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
-        assert(write(master,"\033[200~",6)==6);
-        for (size_t i=0;i<strlen(source);i++) { assert(write(master,source+i,1)==1); struct timespec wait={0,3000000}; nanosleep(&wait,NULL); }
-        assert(write(master,"\033[201~",6)==6); terminal_read(master,buffer,sizeof(buffer),200);
-        if (!access("/usr/bin/fzf",X_OK)) {
-            assert(write(master,"\006",1)==1); terminal_read(master,buffer,sizeof(buffer),1000);
-            assert(strstr(buffer,".torrent"));
-            assert(write(master,"\r",1)==1); terminal_read(master,buffer,sizeof(buffer),400);
+        assert(!strstr(buffer,"Transmission") && !strstr(buffer,"RECONNECT"));
+        if (!cli) {
+            assert(strstr(buffer,"No torrents"));
+            assert(write(master,"a",1)==1); terminal_read(master,buffer,sizeof(buffer),150);
+            assert(write(master,"\033[200~",6)==6);
+            for (size_t i=0;i<strlen(source);i++) { assert(write(master,source+i,1)==1); struct timespec wait={0,3000000}; nanosleep(&wait,NULL); }
+            assert(write(master,"\033[201~",6)==6); terminal_read(master,buffer,sizeof(buffer),200);
+            if (!access("/usr/bin/fzf",X_OK)) {
+                assert(write(master,"\006",1)==1); terminal_read(master,buffer,sizeof(buffer),1000);
+                assert(strstr(buffer,".torrent"));
+                assert(write(master,"\r",1)==1); terminal_read(master,buffer,sizeof(buffer),400);
+            }
+            assert(write(master,"\t\n",2)==2); terminal_read(master,buffer,sizeof(buffer),700);
         }
-        assert(write(master,"\t\n",2)==2); terminal_read(master,buffer,sizeof(buffer),700);
         assert(strstr(buffer,"payload.bin"));
         assert(write(master,"q",1)==1); terminal_read(master,buffer,sizeof(buffer),250);
         int status; assert(waitpid(pid,&status,0)==pid && WIFEXITED(status) && WEXITSTATUS(status)==0); close(master);
@@ -238,6 +243,7 @@ static void test_settings_and_files(void) {
     char root[]="/tmp/potok-settings-XXXXXX",path[PATH_MAX+128],error[1024],config[PATH_MAX]; assert(mkdtemp(root));
     snprintf(config,sizeof(config),"%s/config",root); Settings settings;
     assert(settings_load(&settings,config,true,error,sizeof(error)));
+    assert(!strcmp(settings.browse,getenv("HOME")));
     snprintf(settings.downloads,sizeof(settings.downloads),"%s/data with spaces",root);
     snprintf(settings.state,sizeof(settings.state),"%s/state",root); snprintf(settings.browse,sizeof(settings.browse),"%s/search",root);
     assert(settings_save(&settings,error,sizeof(error))); Settings loaded;
@@ -251,11 +257,17 @@ static void test_settings_and_files(void) {
     const char *names[]={"Fedora live.torrent","evil;touch SENTINEL.torrent","русский\nфайл.TORRENT","ignore.txt"};
     for (size_t i=0;i<COUNT(names);i++) { snprintf(path,sizeof(path),"%s/%s",settings.browse,names[i]); FILE *f=fopen(path,"w"); assert(f); fputs("test",f); fclose(f); }
     snprintf(path,sizeof(path),"%s/loop",settings.browse); assert(!symlink(settings.browse,path));
-    FileList files; assert(files_scan(&files,settings.browse,error,sizeof(error)) && files.count==3);
+    snprintf(path,sizeof(path),"%s/linked.torrent",settings.browse); assert(!symlink("Fedora live.torrent",path));
+    snprintf(path,sizeof(path),"%s/nested",settings.browse); assert(!mkdir(path,0700));
+    snprintf(path,sizeof(path),"%s/nested/second.torrent",settings.browse); FILE *nested=fopen(path,"w"); assert(nested); fclose(nested);
+    FileList files; assert(files_scan(&files,settings.browse,error,sizeof(error)) && files.count==4 && !files.limited);
     assert(file_matches("Fedora live.torrent","fdlv") && !file_matches("Fedora live.torrent","zzz"));
-    a=(App){.demo=true}; strcpy(a.downloads,"/tmp"); open_modal(&a,ADD); a.files=files; a.matches=allocate(files.count*sizeof(*a.matches));
+    a=(App){.demo=true,.settings=loaded}; strcpy(a.downloads,"/tmp"); open_modal(&a,ADD); a.files=files; a.matches=allocate(files.count*sizeof(*a.matches));
     a.modal=FILES; line_set(&a.file_query,"fdlv"); filter_files(&a); assert(a.file_count==1); submit(&a);
     assert(a.modal==ADD && wcsstr(a.input.value,L"Fedora live.torrent"));
+    a.modal=FILES; line_set(&a.file_query,"second"); filter_files(&a); assert(a.file_count==1); submit(&a);
+    assert(a.modal==ADD && wcsstr(a.input.value,L"nested/second.torrent") && !strcmp(a.settings.browse,settings.browse));
+    assert(settings_load(&loaded,config,true,error,sizeof(error)) && !strcmp(loaded.browse,settings.browse));
     assert(cleanup(&a)); assert(!nftw(root,delete_test,16,FTW_DEPTH|FTW_PHYS));
 }
 static void test_editor(void) {
@@ -286,6 +298,6 @@ int main(int argc,char **argv) {
     test_settings_and_files(); puts("ok · private settings, atomic save, fuzzy file search, symlinks");
     test_editor(); puts("ok · stable input viewport, fields, bracketed paste");
     test_ui(argc>1 && !strcmp(argv[1],"--snapshots")); puts("ok · rendering, transparent background, resize, mouse, modals");
-    test_terminal(false); test_terminal(true); puts("ok · PTY: paste, keyboard, background survives TUI exit, clean stop");
+    test_terminal(false,false); test_terminal(true,false); test_terminal(true,true); puts("ok · PTY: paste, keyboard, CLI file with spaces/Unicode, background survives TUI exit, clean stop");
     return 0;
 }

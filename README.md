@@ -18,6 +18,7 @@ sudo apt install build-essential pkg-config libncurses-dev libtorrent-rasterbar-
 
 make -j2
 ./potok
+./potok path/to/file.torrent
 ```
 
 Runtime libraries: ncursesw, libtorrent-rasterbar, OpenSSL and the system C/C++
@@ -44,7 +45,7 @@ make DESTDIR="$PWD/stage" PREFIX=/usr install
 ```
 
 `make` builds the application only. Tests, source archives and portable bundles
-are separate targets. `make source` creates `dist/potok-0.3.1.tar.gz`;
+are separate targets. `make source` creates `dist/potok-0.3.2.tar.gz`;
 `make bundle` creates `dist/potok/` with a copy of libtorrent. The portable bundle
 still needs compatible system ncurses, OpenSSL, C++ runtime and glibc.
 
@@ -69,8 +70,18 @@ still needs compatible system ncurses, OpenSSL, C++ runtime and glibc.
 
 The mouse selects rows, tabs and buttons; the wheel scrolls. Source fields
 support UTF-8, bracketed paste, cursor editing and paths with spaces.
-The picker remembers its last directory. To search elsewhere, type a directory
-in the source field before pressing `Ctrl-F`.
+The picker searches your whole home directory by default and streams matches
+into fzf while scanning. Choosing a file keeps that search root for the next
+search. Set `browse_dir` in the config to use another root, or type a directory
+in the source field before pressing `Ctrl-F` for a single scoped search.
+Symlink directories are not followed. Traversal is capped at 32 levels and
+100,000 torrent files.
+
+`potok path/to/file.torrent` adds the file and opens the interface. Relative
+paths, spaces and Unicode filenames are supported. Quote paths containing
+spaces; use `potok -- -file.torrent` for a name beginning with a dash.
+Only one source may be passed. `potok --background file.torrent` adds it
+without opening TUI.
 
 ```sh
 potok --background
